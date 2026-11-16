@@ -3,14 +3,15 @@
 A Rust preview service for Nautilus, with a GTK4 JPEG viewer and a persistent,
 sandboxed libjpeg-turbo worker. The transport, shared window, JPEG canvas, and
 decoder scheduling are separate modules so more formats can be added later.
-No Sushi delegation or video backend is wired up yet.
+An optional experimental libmpv backend shares the window and Nautilus dispatch.
+The installed desktop build still handles JPEGs only; no Sushi delegation is used.
 
 JPEG failures are shown in the window and logged to stderr. There is **no JPEG
 fallback**. Supported inputs are local, ordinary 8-bit RGB/YCbCr and grayscale
 JPEGs, including progressive coding, EXIF orientations and supported embedded
 ICC profiles. Profiles are converted to sRGB with Little CMS; unprofiled images
 are assumed to be sRGB. CMYK/YCCK, unsupported precision, malformed metadata,
-remote URIs and non-JPEG inputs produce explicit errors.
+remote URIs and inputs without an enabled backend produce explicit errors.
 
 ## Build and run
 
@@ -157,3 +158,58 @@ physical trackpad pinch and pan. Those implementation tests temporarily restored
 Sushi. Subsequent desktop deployment switched the real activation path to Kimbap;
 Space, Down/Up, floating/parent state, close/reopen and cold D-Bus activation were
 verified against the installed binaries.
+
+## Experimental video backend
+
+Build with `cargo build --release -p kimbap --features video`; this also requires
+`mpv-devel` (libmpv 0.41 was tested) and EGL development libraries. Run the result
+with `--experimental-video --bus-name dev.kimbap.VideoTest` and the usual
+`--jpeg-worker` path. This opt-in does not modify the installed desktop service.
+To exercise the renderer without D-Bus:
+
+```sh
+cargo run --release --features video --example video-probe -- /path/to/video.mp4 12 auto
+```
+
+The preview shell selects a backend using GIO content types. Each backend owns
+its widget, controls and load/stop lifecycle; readiness and failure events carry
+the request generation. JPEG and video use the same window, activation and
+Nautilus navigation. Unsupported files and playback failures are explicit errors.
+The libmpv core and its blocking client APIs run on a dedicated control thread;
+the GTK GLArea owns the OpenGL render API/context. There is one replaceable
+pending video request. Switching away or closing queues a stop, including audio;
+the initialized engine remains available for the next preview. EOF retains the
+last frame. Video decoding currently runs inside the frontend process, separate
+from the JPEG worker's sandbox.
+
+The only video control is Mute/Unmute (`m` also toggles it). It defaults to muted
+and persists in `$XDG_CONFIG_HOME/kimbap/preferences.ini` (normally
+`~/.config/kimbap/preferences.ini`), group `[video]`, boolean `muted`. Write errors
+are visible on the button and logged. mpv's personal config, scripts and default
+key bindings are disabled. Hardware decoding uses `hwdec=auto`; actual selection
+is available in `--verbose` logs, rather than inferred from the requested setting.
+
+On this M1/Asahi machine, short visible tests with the user's samples selected
+VA-API for H.264 (720p and 1080p portrait), HEVC (1080p portrait), and VP9
+(3840×2026 at 50 fps). AV1 (1080p30) and a generated VP8 (640×360 at 24 fps) used
+software decoding. `benchmarks/video-probe-2026-11-16.csv` records representative
+isolated probe observations: H.264/HEVC/VP8 had zero reported drops; VP9/AV1 each
+reported one startup drop and then kept pace. Frame-update counts are renderer
+notifications, not independently measured panel presentations. These are short
+working-desktop tests, not sustained thermal/power benchmarks. The VP8 sample
+is synthetic. Hidden-workspace probes were discarded because Sway withheld their
+rendering. GTK's integer buffer scale also differs from native fractional-scale
+players, so these runs do not establish comparative rendering efficiency.
+
+A separate D-Bus name exercised all supplied clips, JPEG/video switches, a burst
+of 30 requests spaced about 80 ms apart, close/reopen, corrupt-video errors and
+recovery, and clean shutdown. Rapid replacement exposed stale dimensions at
+mpv's FILE_LOADED event; readiness now waits for PLAYBACK_RESTART. The mute key
+was checked against mpv's actual state and persisted across process recreation,
+using a temporary XDG config directory. The installed JPEG service was unchanged.
+
+Standalone mpv 0.41 with clean configuration, OpenGL/Wayland and `hwdec=auto`
+also selected VA-API for VP9 and HEVC, with zero drops after roughly 6.7 seconds
+of playback each. The embedded probe's single VP9 startup drop did not continue
+during playback. This baseline does not compare power use or prove that another
+engine would be faster; no competing backend has been implemented.

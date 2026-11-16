@@ -172,3 +172,8 @@ impl Drop for PreviewEndpoint {
 
 pub mod jpeg;
 pub mod viewport;
+
+pub mod backend;
+pub mod preferences;
+#[cfg(feature = "video")]
+pub mod video;

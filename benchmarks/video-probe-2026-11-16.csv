@@ -1,0 +1,6 @@
+sample,codec,hwdec,position_s,frame_updates,mpv_dropped,decoder_dropped,ready_us
+h264-1080,h264,vaapi,9.218,278,0,0,191373
+hevc,hevc,vaapi,10.169,307,0,0,185959
+vp9,vp9,vaapi,6.873,346,1,0,192906
+av1,av1,no,4.867,147,1,0,292994
+vp8,vp8,no,3.958,99,0,0,142332

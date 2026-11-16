@@ -1,37 +1,34 @@
-use crate::canvas::ImageCanvas;
+//! The preview shell owns window/activation/navigation state. Format backends
+//! supply a widget, controls, and generation-tagged readiness/failure events.
+use crate::image_backend::ImageBackend;
 use gtk::{gdk, glib, prelude::*};
 use kimbap::{
-    Command, Direction, Event, PreviewEndpoint, PreviewRequest, WindowState,
-    jpeg::{Decoder, Reply},
+    Command, Direction, Event as NautilusEvent, PreviewEndpoint, PreviewRequest, WindowState,
+    backend::{Backend, Event, Kind, Notify},
 };
-use kimbap_jpeg_ipc::Frame;
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     path::PathBuf,
     rc::Rc,
-    sync::Arc,
     time::Instant,
 };
-
-struct Pixels(Arc<Frame>);
-impl AsRef<[u8]> for Pixels {
-    fn as_ref(&self) -> &[u8] {
-        &self.0.pixels
-    }
-}
-
 pub struct Viewer {
     endpoint: Rc<PreviewEndpoint>,
     window: gtk::Window,
-    canvas: ImageCanvas,
     stack: gtk::Stack,
     error: gtk::Label,
     title: gtk::Label,
     spinner: gtk::Spinner,
-    decoder: Decoder,
+    controls: gtk::Box,
+    backends: RefCell<HashMap<Kind, Rc<dyn Backend>>>,
+    #[cfg(feature = "video")]
+    notify: Notify,
+    video_enabled: bool,
+    active: Cell<Option<Kind>>,
     generation: Cell<u64>,
     current: RefCell<Option<PreviewRequest>>,
-    task: RefCell<Option<glib::JoinHandle<()>>>,
+    routing: RefCell<Option<glib::JoinHandle<()>>>,
     loading: RefCell<Option<glib::SourceId>>,
     started: Cell<Option<Instant>>,
     verbose: bool,
@@ -42,9 +39,10 @@ impl Viewer {
         endpoint: Rc<PreviewEndpoint>,
         worker: PathBuf,
         verbose: bool,
+        video_enabled: bool,
     ) -> Result<Rc<Self>, glib::Error> {
         let css = gtk::CssProvider::new();
-        css.load_from_string(".kimbap {background:#181616;color:#c5c9c5;font-family:Pretendard,sans-serif;} .kimbap headerbar {background:#0d0c0c;color:#c5c9c5;} .kimbap .preview-error {color:#c4746e;padding:32px;} .kimbap button {color:#c5c9c5;} ");
+        css.load_from_string(".kimbap {background:#181616;color:#c5c9c5;font-family:Pretendard,sans-serif;} .kimbap headerbar {background:#0d0c0c;color:#c5c9c5;} .kimbap .preview-error {color:#c4746e;padding:32px;} .kimbap button {color:#c5c9c5;}");
         if let Some(display) = gdk::Display::default() {
             gtk::style_context_add_provider_for_display(
                 &display,
@@ -69,11 +67,9 @@ impl Viewer {
         let title = gtk::Label::new(Some("Kimbap"));
         title.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
         header.set_title_widget(Some(&title));
+        let controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        header.pack_start(&controls);
         window.set_titlebar(Some(&header));
-        let canvas = ImageCanvas::new();
-        let spinner = gtk::Spinner::new();
-        spinner.set_halign(gtk::Align::Center);
-        spinner.set_valign(gtk::Align::Center);
         let error = gtk::Label::new(None);
         error.set_wrap(true);
         error.set_selectable(true);
@@ -82,47 +78,46 @@ impl Viewer {
         let stack = gtk::Stack::new();
         stack.set_hexpand(true);
         stack.set_vexpand(true);
-        stack.add_named(&canvas, Some("image"));
         stack.add_named(&error, Some("error"));
-        stack.add_named(&spinner, Some("loading"));
-        window.set_child(Some(&stack));
-        let (decoder, receive) = Decoder::new(worker);
-        let viewer = Rc::new(Self {
-            endpoint,
-            window,
-            canvas,
-            stack,
-            error,
-            title,
-            spinner,
-            decoder,
-            generation: Cell::new(0),
-            current: RefCell::new(None),
-            task: RefCell::new(None),
-            loading: RefCell::new(None),
-            started: Cell::new(None),
-            verbose,
-            paint: RefCell::new(None),
-        });
-        for (label, tooltip, action) in [
-            ("−", "Zoom out", 0),
-            ("Fit", "Fit image", 1),
-            ("+", "Zoom in", 2),
-        ] {
-            let button = gtk::Button::with_label(label);
-            button.set_tooltip_text(Some(tooltip));
-            let weak = Rc::downgrade(&viewer);
-            button.connect_clicked(move |_| {
+        let spinner = gtk::Spinner::new();
+        spinner.set_halign(gtk::Align::Center);
+        spinner.set_valign(gtk::Align::Center);
+        spinner.set_visible(false);
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&stack));
+        overlay.add_overlay(&spinner);
+        window.set_child(Some(&overlay));
+        let viewer = Rc::new_cyclic(|weak: &std::rc::Weak<Self>| {
+            let weak = weak.clone();
+            let notify: Notify = Rc::new(move |event| {
                 if let Some(v) = weak.upgrade() {
-                    match action {
-                        0 => v.canvas.zoom_by(1. / 1.25),
-                        1 => v.canvas.fit(),
-                        _ => v.canvas.zoom_by(1.25),
-                    }
+                    v.backend_event(event);
                 }
             });
-            header.pack_start(&button);
-        }
+            let image: Rc<dyn Backend> = ImageBackend::new(worker, notify.clone(), verbose);
+            stack.add_named(&image.widget(), Some("jpeg"));
+            Self {
+                endpoint,
+                window,
+                stack,
+                error,
+                title,
+                spinner,
+                controls,
+                backends: RefCell::new(HashMap::from([(Kind::Jpeg, image)])),
+                #[cfg(feature = "video")]
+                notify,
+                video_enabled,
+                active: Cell::new(None),
+                generation: Cell::new(0),
+                current: RefCell::new(None),
+                routing: RefCell::new(None),
+                loading: RefCell::new(None),
+                started: Cell::new(None),
+                verbose,
+                paint: RefCell::new(None),
+            }
+        });
         let weak = Rc::downgrade(&viewer);
         viewer.window.connect_close_request(move |_| {
             if let Some(v) = weak.upgrade() {
@@ -149,17 +144,7 @@ impl Viewer {
                 v.fullscreen();
             }
         });
-        viewer.canvas.add_controller(click);
-        let weak = Rc::downgrade(&viewer);
-        let task = glib::MainContext::default().spawn_local(async move {
-            while let Ok(reply) = receive.recv().await {
-                let Some(viewer) = weak.upgrade() else {
-                    break;
-                };
-                viewer.receive(reply);
-            }
-        });
-        viewer.task.replace(Some(task));
+        viewer.stack.add_controller(click);
         Ok(viewer)
     }
     pub fn handle(self: &Rc<Self>, command: Command) {
@@ -172,6 +157,30 @@ impl Viewer {
         let generation = self.generation.get().wrapping_add(1);
         self.generation.set(generation);
         generation
+    }
+    fn backend(&self, kind: Kind) -> Result<Rc<dyn Backend>, String> {
+        if let Some(backend) = self.backends.borrow().get(&kind) {
+            return Ok(backend.clone());
+        }
+        if kind == Kind::Video && self.video_enabled {
+            #[cfg(feature = "video")]
+            {
+                let preferences = kimbap::preferences::Preferences::load(
+                    kimbap::preferences::Preferences::path(),
+                )?;
+                let backend: Rc<dyn Backend> = kimbap::video::VideoBackend::new(
+                    preferences,
+                    self.notify.clone(),
+                    self.verbose,
+                    "auto".into(),
+                    None,
+                );
+                self.stack.add_named(&backend.widget(), Some("video"));
+                self.backends.borrow_mut().insert(kind, backend.clone());
+                return Ok(backend);
+            }
+        }
+        Err("Video previews are not enabled in this session".into())
     }
     fn show(self: &Rc<Self>, request: PreviewRequest) {
         let requested = Instant::now();
@@ -190,7 +199,7 @@ impl Viewer {
         let basename = file
             .basename()
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Image preview".into());
+            .unwrap_or_else(|| "File preview".into());
         self.window.set_title(Some(&basename));
         self.title.set_label(&basename);
         self.current.replace(Some(request));
@@ -200,19 +209,21 @@ impl Viewer {
             return;
         }
         let generation = self.next_generation();
-        self.decoder.cancel(generation);
         self.started.set(Some(requested));
         self.cancel_loading();
         self.cancel_paint();
-        if first {
-            self.canvas.set_texture(None);
-            self.stack.set_visible_child_name("loading");
-            self.spinner.start();
+        self.cancel_routing();
+        // Stop audio promptly while MIME lookup runs. A newer video load then
+        // replaces this stop request; no native client call blocks GTK.
+        if self.active.get() == Some(Kind::Video)
+            && let Some(video) = self.backends.borrow().get(&Kind::Video)
+        {
+            video.stop(generation);
         }
         self.window.present();
         self.publish(parent);
         let Some(path) = file.path() else {
-            self.failure("Only local JPEG files are supported right now");
+            self.failure("Only local files are supported right now");
             return;
         };
         let weak = Rc::downgrade(self);
@@ -220,12 +231,94 @@ impl Viewer {
             glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
                 if let Some(v) = weak.upgrade() {
                     v.loading.borrow_mut().take();
-                    v.stack.set_visible_child_name("loading");
+                    v.spinner.set_visible(true);
                     v.spinner.start();
                 }
             });
         self.loading.replace(Some(timer));
-        self.decoder.load(generation, path);
+        let weak = Rc::downgrade(self);
+        let task = glib::MainContext::default().spawn_local(async move {
+            let info = file
+                .query_info_future(
+                    "standard::type,standard::content-type",
+                    gio::FileQueryInfoFlags::NONE,
+                    glib::Priority::DEFAULT,
+                )
+                .await;
+            let Some(viewer) = weak.upgrade() else {
+                return;
+            };
+            if viewer.generation.get() != generation {
+                return;
+            }
+            match info {
+                Ok(info) => {
+                    if info.file_type() != gio::FileType::Regular {
+                        viewer.failure("This item is not a supported regular file");
+                        return;
+                    }
+                    let kind = info
+                        .content_type()
+                        .as_deref()
+                        .and_then(Kind::for_content_type);
+                    let Some(kind) = kind else {
+                        viewer.failure("This file type does not have a preview backend yet");
+                        return;
+                    };
+                    match viewer.backend(kind) {
+                        Ok(backend) => {
+                            if viewer.active.get() != Some(kind) {
+                                if let Some(old) = viewer
+                                    .active
+                                    .get()
+                                    .and_then(|k| viewer.backends.borrow().get(&k).cloned())
+                                {
+                                    old.stop(generation);
+                                }
+                                while let Some(child) = viewer.controls.first_child() {
+                                    viewer.controls.remove(&child);
+                                }
+                                viewer.controls.append(&backend.controls());
+                            }
+                            viewer.active.set(Some(kind));
+                            viewer.stack.set_visible_child_name(if kind == Kind::Jpeg {
+                                "jpeg"
+                            } else {
+                                "video"
+                            });
+                            backend.load(generation, path);
+                        }
+                        Err(error) => viewer.failure(&error),
+                    }
+                }
+                Err(error) => viewer.failure(&format!("Cannot inspect this file: {error}")),
+            }
+        });
+        self.routing.replace(Some(task));
+    }
+    fn backend_event(self: &Rc<Self>, event: Event) {
+        match event {
+            Event::Ready {
+                generation,
+                width,
+                height,
+            } if generation == self.generation.get() && self.window.is_visible() => {
+                self.cancel_loading();
+                self.spinner.stop();
+                self.spinner.set_visible(false);
+                if !self.window.is_fullscreen() {
+                    self.size_for_content(width, height);
+                }
+                self.trace_paint(generation);
+            }
+            Event::Failed {
+                generation,
+                message,
+            } if generation == self.generation.get() && self.window.is_visible() => {
+                self.failure(&message)
+            }
+            _ => (),
+        }
     }
     fn set_parent(&self, handle: &str) -> String {
         if let Some(surface) = self.window.surface() {
@@ -254,58 +347,13 @@ impl Viewer {
             eprintln!("kimbap: window state: {error}");
         }
     }
-    fn receive(self: &Rc<Self>, reply: Reply) {
-        if reply.generation != self.generation.get() || !self.window.is_visible() {
-            return;
-        }
-        self.cancel_loading();
-        self.spinner.stop();
-        match reply.result {
-            Ok(decoded) => {
-                let frame = decoded.frame;
-                let width = frame.width as i32;
-                let height = frame.height as i32;
-                let decode_us = frame.decode_us;
-                let bytes = glib::Bytes::from_owned(Pixels(frame));
-                let texture = gdk::MemoryTexture::new(
-                    width,
-                    height,
-                    gdk::MemoryFormat::R8g8b8a8,
-                    &bytes,
-                    width as usize * 4,
-                );
-                self.canvas.set_texture(Some(texture.upcast_ref()));
-                self.stack.set_visible_child_name("image");
-                if !self.window.is_fullscreen() {
-                    self.size_for_image(width, height);
-                }
-                self.trace_paint(reply.generation);
-                if self.verbose {
-                    eprintln!(
-                        "kimbap: image ready generation={} size={}x{} decode_us={} load_us={} cache={} total_us={}",
-                        reply.generation,
-                        width,
-                        height,
-                        decode_us,
-                        decoded.elapsed.as_micros(),
-                        decoded.cache_hit,
-                        self.started
-                            .get()
-                            .map(|s| s.elapsed().as_micros())
-                            .unwrap_or(0)
-                    );
-                }
-            }
-            Err(error) => self.failure(&error),
-        }
-    }
-    fn size_for_image(&self, width: i32, height: i32) {
+    fn size_for_content(&self, width: i32, height: i32) {
         if let Some(surface) = self.window.surface()
             && let Some(monitor) = surface.display().monitor_at_surface(&surface)
         {
             let geometry = monitor.geometry();
             let max_w = (geometry.width() as f64 * 0.95).max(320.);
-            let max_h = (geometry.height() as f64 * 0.9 - 52.).max(240.);
+            let max_h = (geometry.height() as f64 * 0.90 - 52.).max(240.);
             let ratio = (max_w / width as f64).min(max_h / height as f64);
             self.window.set_default_size(
                 (width as f64 * ratio).round() as i32,
@@ -321,13 +369,12 @@ impl Viewer {
         if let Some(clock) = self.window.frame_clock() {
             let weak = Rc::downgrade(self);
             let id = clock.connect_after_paint(move |_| {
-                if let Some(viewer) = weak.upgrade() {
-                    viewer.cancel_paint();
-                    if viewer.generation.get() == generation {
+                if let Some(v) = weak.upgrade() {
+                    v.cancel_paint();
+                    if v.generation.get() == generation {
                         eprintln!(
-                            "kimbap: image painted generation={generation} total_us={}",
-                            viewer
-                                .started
+                            "kimbap: backend painted generation={generation} total_us={}",
+                            v.started
                                 .get()
                                 .map(|t| t.elapsed().as_micros())
                                 .unwrap_or(0)
@@ -348,29 +395,40 @@ impl Viewer {
             timer.remove();
         }
     }
+    fn cancel_routing(&self) {
+        if let Some(task) = self.routing.borrow_mut().take() {
+            task.abort();
+        }
+    }
     fn failure(&self, message: &str) {
         self.cancel_loading();
         self.spinner.stop();
-        self.canvas.set_texture(None);
+        self.spinner.set_visible(false);
+        for backend in self.backends.borrow().values() {
+            backend.stop(self.generation.get());
+        }
         self.error
-            .set_label(&format!("Could not preview this image\n\n{message}"));
+            .set_label(&format!("Could not preview this file\n\n{message}"));
         self.stack.set_visible_child_name("error");
-        eprintln!("kimbap: JPEG preview failed: {message}");
+        eprintln!("kimbap: preview failed: {message}");
     }
     pub fn close(&self) {
         let generation = self.next_generation();
-        self.decoder.cancel(generation);
+        self.cancel_routing();
         self.cancel_loading();
         self.cancel_paint();
+        for backend in self.backends.borrow().values() {
+            backend.stop(generation);
+        }
         self.spinner.stop();
+        self.spinner.set_visible(false);
         self.window.set_visible(false);
-        self.canvas.set_texture(None);
         self.current.borrow_mut().take();
         self.publish(String::new());
     }
-    fn event(&self, event: Event) {
+    fn event(&self, event: NautilusEvent) {
         if self.verbose
-            && let Event::Selection(direction) = &event
+            && let NautilusEvent::Selection(direction) = &event
         {
             eprintln!(
                 "kimbap: selection direction={} at_us={}",
@@ -390,34 +448,22 @@ impl Viewer {
         }
     }
     fn key(&self, key: gdk::Key, modifiers: gdk::ModifierType) -> glib::Propagation {
-        let ctrl = modifiers.contains(gdk::ModifierType::CONTROL_MASK);
         match key {
             gdk::Key::Escape | gdk::Key::space | gdk::Key::q => self.close(),
-            gdk::Key::Left => self.event(Event::Selection(Direction::Left)),
-            gdk::Key::Right => self.event(Event::Selection(Direction::Right)),
-            gdk::Key::Up => self.event(Event::Selection(Direction::Up)),
-            gdk::Key::Down => self.event(Event::Selection(Direction::Down)),
+            gdk::Key::Left => self.event(NautilusEvent::Selection(Direction::Left)),
+            gdk::Key::Right => self.event(NautilusEvent::Selection(Direction::Right)),
+            gdk::Key::Up => self.event(NautilusEvent::Selection(Direction::Up)),
+            gdk::Key::Down => self.event(NautilusEvent::Selection(Direction::Down)),
             gdk::Key::F11 => self.fullscreen(),
-            gdk::Key::_0 if ctrl => self.canvas.fit(),
-            gdk::Key::_1 if ctrl => self.canvas.native_size(),
-            gdk::Key::plus | gdk::Key::equal | gdk::Key::KP_Add => self.canvas.zoom_by(1.25),
-            gdk::Key::minus | gdk::Key::KP_Subtract => self.canvas.zoom_by(1. / 1.25),
-            gdk::Key::c if ctrl => {
-                if let Some(texture) = self.canvas.texture() {
-                    self.window.clipboard().set_texture(&texture);
-                }
-            }
             gdk::Key::F2 => {
                 let uri = self.current.borrow().as_ref().map(|r| r.uri.clone());
                 if let Some(uri) = uri {
                     self.close();
-                    // Let the compositor return focus before Nautilus opens
-                    // its rename popover, as required by the existing Sushi UI.
                     let endpoint = self.endpoint.clone();
                     glib::timeout_add_local_once(
                         std::time::Duration::from_millis(200),
                         move || {
-                            if let Err(error) = endpoint.emit(&Event::Rename(uri)) {
+                            if let Err(error) = endpoint.emit(&NautilusEvent::Rename(uri)) {
                                 eprintln!("kimbap: Nautilus rename event: {error}");
                             }
                         },
@@ -425,23 +471,30 @@ impl Viewer {
                 }
             }
             gdk::Key::Delete => {
-                let uri = self.current.borrow().as_ref().map(|r| r.uri.clone());
-                if let Some(uri) = uri {
-                    self.event(Event::Trash(uri));
+                if let Some(uri) = self.current.borrow().as_ref().map(|r| r.uri.clone()) {
+                    self.event(NautilusEvent::Trash(uri));
                 }
             }
-            _ => return glib::Propagation::Proceed,
+            _ => {
+                let handled = self
+                    .active
+                    .get()
+                    .and_then(|k| self.backends.borrow().get(&k).cloned())
+                    .is_some_and(|b| b.key(key, modifiers));
+                if !handled {
+                    return glib::Propagation::Proceed;
+                }
+            }
         }
         glib::Propagation::Stop
     }
 }
 impl Drop for Viewer {
     fn drop(&mut self) {
+        self.cancel_routing();
         self.cancel_loading();
         self.cancel_paint();
-        if let Some(task) = self.task.get_mut().take() {
-            task.abort();
-        }
         self.window.destroy();
+        self.backends.get_mut().clear();
     }
 }

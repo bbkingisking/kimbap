@@ -1,4 +1,5 @@
 mod canvas;
+mod image_backend;
 mod viewer;
 
 use std::{
@@ -33,6 +34,7 @@ fn run() -> Result<()> {
     let mut bus_name = BUS_NAME.to_owned();
     let mut verbose = false;
     let mut transport_only = false;
+    let mut experimental_video = false;
     let mut worker = std::env::current_exe()?.with_file_name("kimbap-jpeg-worker");
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -40,6 +42,7 @@ fn run() -> Result<()> {
             "--bus-name" => bus_name = args.next().ok_or("--bus-name requires a name")?,
             "--verbose" => verbose = true,
             "--transport-only" => transport_only = true,
+            "--experimental-video" => experimental_video = true,
             "--jpeg-worker" => {
                 worker = PathBuf::from(args.next().ok_or("--jpeg-worker requires a path")?)
             }
@@ -49,17 +52,21 @@ fn run() -> Result<()> {
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: kimbap [--bus-name NAME] [--verbose] [--jpeg-worker PATH] [--transport-only]\n\n\
-                     JPEG previews with a sandboxed decoder and a GTK4 window.\n\n\
+                    "Usage: kimbap [--bus-name NAME] [--verbose] [--jpeg-worker PATH] [--transport-only] [--experimental-video]\n\n\
+                     Format backends in a shared GTK4 preview window.\n\n\
                      --bus-name NAME  Alternative name for isolated development\n\
                      --verbose        Log commands and image timings (activation tokens omitted)\n\
                      --jpeg-worker    Path to the bundled decoder executable\n\
-                     --transport-only Export the no-op interface without a display"
+                     --transport-only Export the no-op interface without a display\n\
+                     --experimental-video Enable the experimental libmpv backend"
                 );
                 return Ok(());
             }
             _ => return Err(format!("unknown argument {arg:?}; see --help").into()),
         }
+    }
+    if experimental_video && !cfg!(feature = "video") {
+        return Err("Video support requires a build with --features video".into());
     }
     if !gio::dbus_is_name(&bus_name) || bus_name.starts_with(':') {
         return Err(format!("not a well-known D-Bus name: {bus_name:?}").into());
@@ -110,7 +117,12 @@ fn run() -> Result<()> {
     let viewer = if transport_only {
         None
     } else {
-        Some(viewer::Viewer::new(endpoint.clone(), worker, verbose)?)
+        Some(viewer::Viewer::new(
+            endpoint.clone(),
+            worker,
+            verbose,
+            experimental_video,
+        )?)
     };
     if let Some(viewer) = &viewer {
         *ui.borrow_mut() = Rc::downgrade(viewer);
@@ -179,7 +191,11 @@ fn run() -> Result<()> {
         if transport_only {
             "transport only"
         } else {
-            "JPEG viewer"
+            if experimental_video {
+                "JPEG + experimental video"
+            } else {
+                "JPEG viewer"
+            }
         }
     );
     main_loop.run();

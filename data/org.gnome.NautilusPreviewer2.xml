@@ -1,0 +1,26 @@
+<node>
+  <!-- Nautilus 51 preview protocol. Keep this boundary independent of renderers. -->
+  <interface name="org.gnome.NautilusPreviewer2">
+    <method name="ShowFile">
+      <arg type="s" direction="in" name="uri"/>
+      <arg type="s" direction="in" name="windowHandle"/>
+      <arg type="b" direction="in" name="closeIfAlreadyShown"/>
+      <arg type="s" direction="in" name="activationToken"/>
+    </method>
+    <method name="Close"/>
+    <property name="ParentHandle" type="s" access="read"/>
+    <property name="Visible" type="b" access="read"/>
+    <signal name="SelectionEvent">
+      <arg type="u" name="direction"/>
+    </signal>
+    <signal name="NavigateTo">
+      <arg type="s" name="uri"/>
+    </signal>
+    <signal name="Rename">
+      <arg type="s" name="uri"/>
+    </signal>
+    <signal name="Trash">
+      <arg type="s" name="uri"/>
+    </signal>
+  </interface>
+</node>

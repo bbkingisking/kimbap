@@ -46,9 +46,16 @@ sandbox supports both builds. `--verbose` adds timings and accepted requests;
 activation tokens are omitted. `--transport-only` exports the original no-op
 interface without requiring a display, for protocol development/tests.
 
-This repository installs no desktop service or activation files. Nautilus's
-normal desktop activation remains unchanged. To test real Nautilus, the public
-name must temporarily belong to Kimbap; don't run two public preview owners.
+Desktop deployment is owned by `~/src/sway-desktop`. On this machine the frontend
+and static worker are installed in `~/.local/opt/kimbap/bin/`, with a
+`~/.local/bin/kimbap` symlink. `kimbap.service` owns the public preview name,
+starts with the graphical session and is D-Bus activated. It sets
+`GSK_RENDERER=vulkan`. The former Sushi unit is retired; other formats currently
+show Kimbap's unsupported-file error. No Sushi fallback is active.
+
+This application repository contains no installer or desktop activation sources.
+After manually replacing both installed binaries, restart `kimbap.service`.
+Don't run a second public preview owner; use `--bus-name` for development.
 
 ## Controls
 
@@ -146,5 +153,7 @@ paint, with the final image correct. Fast-run timings describe the surviving
 requests and must not be treated as throughput for every requested image. The
 window's Wayland parent, same-file toggle, close/reopen, explicit error screen,
 error recovery and keyboard zoom/reset were exercised. The user confirmed
-physical trackpad pinch and pan. Normal Sushi activation was restored afterward;
-no desktop deployment change is part of this milestone.
+physical trackpad pinch and pan. Those implementation tests temporarily restored
+Sushi. Subsequent desktop deployment switched the real activation path to Kimbap;
+Space, Down/Up, floating/parent state, close/reopen and cold D-Bus activation were
+verified against the installed binaries.

@@ -2,7 +2,7 @@
 //!
 //! Export on the GLib main context used by the eventual preview UI. Exporting
 //! does not acquire a bus name or create a window; the executable controls the
-//! service lifecycle and currently accepts commands without acting on them.
+//! service lifecycle. Rendering and decoding live outside this protocol boundary.
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
@@ -123,8 +123,8 @@ impl PreviewEndpoint {
         })
     }
 
-    /// Future UI code calls this when window state actually changes. The no-op
-    /// executable never calls it, so Nautilus correctly sees Visible=false.
+    /// Report actual window changes. The transport-only mode never calls this,
+    /// so headless protocol clients correctly see Visible=false.
     pub fn set_window_state(&self, next: WindowState) -> Result<(), glib::Error> {
         let mut changed = HashMap::<&str, glib::Variant>::new();
         {
@@ -169,3 +169,6 @@ impl Drop for PreviewEndpoint {
         }
     }
 }
+
+pub mod jpeg;
+pub mod viewport;

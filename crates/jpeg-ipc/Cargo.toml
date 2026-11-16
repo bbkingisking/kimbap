@@ -1,0 +1,9 @@
+[package]
+name = "kimbap-jpeg-ipc"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+memmap2 = "0.9"
+rustix = { version = "1", features = ["fs", "net"] }

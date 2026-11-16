@@ -1,0 +1,15 @@
+[package]
+name = "kimbap-jpeg-worker"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+kimbap-jpeg-ipc = { path = "../jpeg-ipc" }
+turbojpeg = { version = "1.5", default-features = false, features = ["cmake", "require-simd"] }
+kamadak-exif = "0.6"
+lcms2 = { version = "6.1", features = ["static"] }
+libc = "0.2"
+
+[dev-dependencies]
+kimbap = { path = "../.." }

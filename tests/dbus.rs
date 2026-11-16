@@ -222,7 +222,7 @@ async fn exercise_protocol() {
     let log = child.stop();
     assert!(log.contains("ShowFile uri=\"file:///does-not-exist/한글 image.jpeg\""));
     assert!(log.contains("parent=true close_if_already_shown=true activation=true"));
-    assert!(log.contains("Close (no-op)"));
+    assert!(log.contains("Close"));
     assert!(!log.contains("never-log-this-token"));
     assert!(
         call(
@@ -388,7 +388,7 @@ impl TestProcess {
     fn start() -> Self {
         let log = std::env::temp_dir().join(format!("kimbap-test-{}.log", std::process::id()));
         let child = Process::new(env!("CARGO_BIN_EXE_kimbap"))
-            .arg("--verbose")
+            .args(["--verbose", "--transport-only"])
             .stdout(Stdio::null())
             .stderr(File::create(&log).unwrap())
             .spawn()

@@ -1,6 +1,12 @@
+mod canvas;
+mod viewer;
+
 use std::{
+    cell::RefCell,
     error::Error,
+    path::PathBuf,
     process::ExitCode,
+    rc::{Rc, Weak},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -26,22 +32,29 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     let mut bus_name = BUS_NAME.to_owned();
     let mut verbose = false;
+    let mut transport_only = false;
+    let mut worker = std::env::current_exe()?.with_file_name("kimbap-jpeg-worker");
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--bus-name" => bus_name = args.next().ok_or("--bus-name requires a name")?,
             "--verbose" => verbose = true,
+            "--transport-only" => transport_only = true,
+            "--jpeg-worker" => {
+                worker = PathBuf::from(args.next().ok_or("--jpeg-worker requires a path")?)
+            }
             "--version" => {
                 println!("kimbap {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: kimbap [--bus-name NAME] [--verbose]\n\n\
-                     Exports Nautilus's preview interface. ShowFile and Close currently\n\
-                     acknowledge requests without opening a window or loading files.\n\n\
+                    "Usage: kimbap [--bus-name NAME] [--verbose] [--jpeg-worker PATH] [--transport-only]\n\n\
+                     JPEG previews with a sandboxed decoder and a GTK4 window.\n\n\
                      --bus-name NAME  Alternative name for isolated development\n\
-                     --verbose        Log accepted commands (activation tokens are omitted)"
+                     --verbose        Log commands and image timings (activation tokens omitted)\n\
+                     --jpeg-worker    Path to the bundled decoder executable\n\
+                     --transport-only Export the no-op interface without a display"
                 );
                 return Ok(());
             }
@@ -55,20 +68,53 @@ fn run() -> Result<()> {
     let context = glib::MainContext::default();
     let connection = context.block_on(gio::bus_get_future(gio::BusType::Session))?;
     connection.set_exit_on_close(false);
-    let endpoint = PreviewEndpoint::export(&connection, move |command| {
+    let occupied = context.block_on(connection.call_future(
+        Some("org.freedesktop.DBus"),
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "NameHasOwner",
+        Some(&(bus_name.as_str(),).to_variant()),
+        None,
+        gio::DBusCallFlags::NONE,
+        5000,
+    ))?;
+    if occupied.get::<(bool,)>() == Some((true,)) {
+        return Err(format!(
+            "D-Bus name {bus_name} is already owned; stop its owner explicitly or use --bus-name"
+        )
+        .into());
+    }
+    if !transport_only {
+        gtk::init()?;
+    }
+    let ui: Rc<RefCell<Weak<viewer::Viewer>>> = Rc::new(RefCell::new(Weak::new()));
+    let dispatch = ui.clone();
+    let endpoint = Rc::new(PreviewEndpoint::export(&connection, move |command| {
         if verbose {
-            match command {
+            match &command {
                 Command::ShowFile(request) => eprintln!(
-                    "kimbap: ShowFile uri={:?} parent={} close_if_already_shown={} activation={} (no-op)",
+                    "kimbap: ShowFile uri={:?} parent={} close_if_already_shown={} activation={} at_us={}",
                     request.uri,
                     !request.window_handle.is_empty(),
                     request.close_if_already_shown,
                     !request.activation_token.is_empty(),
+                    glib::monotonic_time(),
                 ),
-                Command::Close => eprintln!("kimbap: Close (no-op)"),
+                Command::Close => eprintln!("kimbap: Close"),
             }
         }
-    })?;
+        if let Some(viewer) = dispatch.borrow().upgrade() {
+            viewer.handle(command);
+        }
+    })?);
+    let viewer = if transport_only {
+        None
+    } else {
+        Some(viewer::Viewer::new(endpoint.clone(), worker, verbose)?)
+    };
+    if let Some(viewer) = &viewer {
+        *ui.borrow_mut() = Rc::downgrade(viewer);
+    }
 
     // DO_NOT_QUEUE: never replace Sushi, nor wait silently to take its name later.
     // Export first so clients can introspect/call immediately after name acquisition.
@@ -128,13 +174,24 @@ fn run() -> Result<()> {
         })
         .collect();
 
-    eprintln!("kimbap: ready on {bus_name} (no preview backends)");
+    eprintln!(
+        "kimbap: ready on {bus_name} ({})",
+        if transport_only {
+            "transport only"
+        } else {
+            "JPEG viewer"
+        }
+    );
     main_loop.run();
     for signal in signals {
         signal.remove();
     }
     drop(lost);
     connection.disconnect(closed);
+    if let Some(viewer) = viewer {
+        viewer.close();
+        drop(viewer);
+    }
     drop(endpoint);
     if !connection.is_closed() {
         context.block_on(connection.call_future(

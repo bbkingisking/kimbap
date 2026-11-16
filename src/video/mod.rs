@@ -15,6 +15,16 @@ use std::{
     time::Instant,
 };
 
+/// Call once on the main thread after GTK initialization, before starting video.
+/// GTK applies the user's locale; libmpv requires the numeric category to be C.
+/// Keep translations and all other locale categories in the user's locale.
+pub fn initialize() -> Result<(), String> {
+    if unsafe { libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr()) }.is_null() {
+        return Err("Cannot initialize libmpv's required C numeric locale".into());
+    }
+    Ok(())
+}
+
 pub struct VideoBackend {
     area: gtk::GLArea,
     button: gtk::Button,

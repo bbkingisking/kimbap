@@ -4,7 +4,7 @@ A Rust preview service for Nautilus, with a GTK4 JPEG viewer and a persistent,
 sandboxed libjpeg-turbo worker. The transport, shared window, JPEG canvas, and
 decoder scheduling are separate modules so more formats can be added later.
 An optional experimental libmpv backend shares the window and Nautilus dispatch.
-The installed desktop build still handles JPEGs only; no Sushi delegation is used.
+The installed desktop build enables JPEG and video previews; no Sushi delegation is used.
 
 JPEG failures are shown in the window and logged to stderr. There is **no JPEG
 fallback**. Supported inputs are local, ordinary 8-bit RGB/YCbCr and grayscale
@@ -51,8 +51,9 @@ Desktop deployment is owned by `~/src/sway-desktop`. On this machine the fronten
 and static worker are installed in `~/.local/opt/kimbap/bin/`, with a
 `~/.local/bin/kimbap` symlink. `kimbap.service` owns the public preview name,
 starts with the graphical session and is D-Bus activated. It sets
-`GSK_RENDERER=vulkan`. The former Sushi unit is retired; other formats currently
-show Kimbap's unsupported-file error. No Sushi fallback is active.
+`GSK_RENDERER=vulkan` and passes `--experimental-video` to a frontend built with
+`--features video`. The former Sushi unit is retired; unsupported formats
+show Kimbap's explicit error. No Sushi fallback is active.
 
 This application repository contains no installer or desktop activation sources.
 After manually replacing both installed binaries, restart `kimbap.service`.
@@ -213,3 +214,11 @@ also selected VA-API for VP9 and HEVC, with zero drops after roughly 6.7 seconds
 of playback each. The embedded probe's single VP9 startup drop did not continue
 during playback. This baseline does not compare power use or prove that another
 engine would be faster; no competing backend has been implemented.
+
+The live desktop subsequently enabled this backend in both systemd and direct
+D-Bus activation. Deployment exposed GTK's `en_US.UTF-8` numeric locale, which
+libmpv rejects; startup now resets only LC_NUMERIC to C after GTK initialization.
+The terminal experiments had inherited C.UTF-8 and missed this requirement.
+Live checks verified moving frames for all five supplied videos, JPEG recovery,
+Space/arrow navigation, parented floating windows and close/reopen. Other locale
+categories retain the desktop settings.

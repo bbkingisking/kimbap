@@ -93,6 +93,10 @@ fn run() -> Result<()> {
     }
     if !transport_only {
         gtk::init()?;
+        #[cfg(feature = "video")]
+        if experimental_video {
+            kimbap::video::initialize()?;
+        }
     }
     let ui: Rc<RefCell<Weak<viewer::Viewer>>> = Rc::new(RefCell::new(Weak::new()));
     let dispatch = ui.clone();

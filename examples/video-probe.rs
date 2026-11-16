@@ -12,6 +12,7 @@ fn main() {
     let seconds = args.next().map(|v| v.parse::<u64>().unwrap()).unwrap_or(12);
     let mode = args.next().unwrap_or("auto".into());
     gtk::init().unwrap();
+    kimbap::video::initialize().unwrap();
     let application = gtk::Application::builder()
         .application_id("dev.kimbap.VideoProbe")
         .flags(gio::ApplicationFlags::NON_UNIQUE)

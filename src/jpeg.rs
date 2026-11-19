@@ -1,20 +1,13 @@
 //! JPEG scheduling and sandbox lifecycle. Blocking filesystem and socket work
 //! stays on one thread; a single pending slot always contains the latest request.
-use kimbap_jpeg_ipc::{self as ipc, Frame};
+use crate::worker::Worker;
+use kimbap_worker::{self as ipc, Frame};
 use std::{
     collections::VecDeque,
     fs::{Metadata, OpenOptions},
-    io::{self, Read},
-    os::{
-        fd::AsRawFd,
-        unix::{
-            fs::{MetadataExt, OpenOptionsExt},
-            net::UnixStream,
-            process::CommandExt,
-        },
-    },
-    path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    io::Read,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    path::PathBuf,
     sync::{Arc, Condvar, Mutex},
     thread,
     time::{Duration, Instant},
@@ -188,11 +181,15 @@ fn run(shared: Arc<Shared>, send: async_channel::Sender<Reply>, worker_path: Pat
             }
             if worker.is_none() {
                 worker = Some(
-                    Worker::spawn(&worker_path)
+                    Worker::spawn(&worker_path, None, ipc::JPEG_MAGIC)
                         .map_err(|e| format!("Cannot start sandboxed JPEG worker: {e}"))?,
                 );
             }
-            let response = worker.as_mut().unwrap().decode(&bytes);
+            let response = (|| {
+                let socket = &mut worker.as_mut().unwrap().socket;
+                ipc::write_request(socket, &bytes)?;
+                ipc::read_response(socket)
+            })();
             let frame = match response {
                 Ok(result) => result?,
                 Err(error) => {
@@ -229,127 +226,4 @@ fn run(shared: Arc<Shared>, send: async_channel::Sender<Reply>, worker_path: Pat
             break;
         }
     }
-}
-
-struct Worker {
-    socket: UnixStream,
-    child: Child,
-}
-impl Worker {
-    fn spawn(path: &Path) -> io::Result<Self> {
-        let path = path.canonicalize()?;
-        let (mut socket, child_socket) = UnixStream::pair()?;
-        socket.set_read_timeout(Some(Duration::from_secs(4)))?;
-        socket.set_write_timeout(Some(Duration::from_secs(4)))?;
-        let descriptor = child_socket.as_raw_fd();
-        let preferred = performance_cpus();
-        let mut command = Command::new("/usr/bin/bwrap");
-        command
-            .args([
-                "--unshare-all",
-                "--die-with-parent",
-                "--new-session",
-                "--clearenv",
-                "--setenv",
-                "LC_ALL",
-                "C",
-                "--ro-bind",
-                "/usr",
-                "/usr",
-                "--symlink",
-                "usr/lib64",
-                "/lib64",
-                "--symlink",
-                "usr/lib",
-                "/lib",
-                "--ro-bind-try",
-                "/etc/ld.so.cache",
-                "/etc/ld.so.cache",
-                "--ro-bind",
-            ])
-            .arg(path)
-            .args([
-                "/decoder", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--", "/decoder",
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit());
-        // Only async-signal-safe syscalls are allowed between fork and exec.
-        unsafe {
-            command.pre_exec(move || {
-                if let Some(mask) = preferred
-                    && libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &mask)
-                        != 0
-                {
-                    return Err(io::Error::last_os_error());
-                }
-                if descriptor == 3 {
-                    if libc::fcntl(3, libc::F_SETFD, 0) == -1 {
-                        return Err(io::Error::last_os_error());
-                    }
-                } else if libc::dup2(descriptor, 3) == -1 {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let child = command.spawn()?;
-        drop(child_socket);
-        let mut worker = Self {
-            socket: socket.try_clone()?,
-            child,
-        };
-        let mut magic = [0; 4];
-        socket.read_exact(&mut magic)?;
-        if &magic != ipc::MAGIC {
-            return Err(ipc::invalid("JPEG worker protocol version mismatch"));
-        }
-        worker.socket = socket;
-        Ok(worker)
-    }
-    fn decode(&mut self, bytes: &[u8]) -> io::Result<Result<Arc<Frame>, String>> {
-        ipc::write_request(&mut self.socket, bytes)?;
-        ipc::read_response(&mut self.socket)
-    }
-}
-impl Drop for Worker {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-// Respect taskset/cgroup restrictions. On systems without capacity metadata,
-// or with homogeneous allowed cores, retain the scheduler's original CPU set.
-fn performance_cpus() -> Option<libc::cpu_set_t> {
-    let mut allowed = unsafe { std::mem::zeroed::<libc::cpu_set_t>() };
-    if unsafe { libc::sched_getaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &mut allowed) }
-        != 0
-    {
-        return None;
-    }
-    let mut capacities = Vec::new();
-    for cpu in 0..libc::CPU_SETSIZE as usize {
-        if unsafe { libc::CPU_ISSET(cpu, &allowed) } {
-            let capacity =
-                std::fs::read_to_string(format!("/sys/devices/system/cpu/cpu{cpu}/cpu_capacity"))
-                    .ok()?
-                    .trim()
-                    .parse::<u32>()
-                    .ok()?;
-            capacities.push((cpu, capacity));
-        }
-    }
-    let max = capacities.iter().map(|(_, c)| *c).max()?;
-    let min = capacities.iter().map(|(_, c)| *c).min()?;
-    if max == min {
-        return None;
-    }
-    let mut preferred = unsafe { std::mem::zeroed::<libc::cpu_set_t>() };
-    for (cpu, capacity) in capacities {
-        if capacity == max {
-            unsafe { libc::CPU_SET(cpu, &mut preferred) }
-        }
-    }
-    Some(preferred)
 }

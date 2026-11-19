@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-kimbap-jpeg-ipc = { path = "../jpeg-ipc" }
+kimbap-worker = { path = "../worker" }
 turbojpeg = { version = "1.5", default-features = false, features = ["cmake", "require-simd"] }
 kamadak-exif = "0.6"
 lcms2 = { version = "6.1", features = ["static"] }

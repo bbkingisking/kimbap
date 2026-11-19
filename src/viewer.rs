@@ -1,6 +1,6 @@
 //! The preview shell owns window/activation/navigation state. Format backends
 //! supply a widget, controls, and generation-tagged readiness/failure events.
-use crate::image_backend::ImageBackend;
+use crate::{image_backend::ImageBackend, pdf_backend::PdfBackend};
 use gtk::{gdk, glib, prelude::*};
 use kimbap::{
     Command, Direction, Event as NautilusEvent, PreviewEndpoint, PreviewRequest, WindowState,
@@ -38,6 +38,8 @@ impl Viewer {
     pub fn new(
         endpoint: Rc<PreviewEndpoint>,
         worker: PathBuf,
+        pdf_worker: PathBuf,
+        pdfium_library: PathBuf,
         verbose: bool,
         video_enabled: bool,
     ) -> Result<Rc<Self>, glib::Error> {
@@ -96,6 +98,9 @@ impl Viewer {
             });
             let image: Rc<dyn Backend> = ImageBackend::new(worker, notify.clone(), verbose);
             stack.add_named(&image.widget(), Some("jpeg"));
+            let pdf: Rc<dyn Backend> =
+                PdfBackend::new(pdf_worker, pdfium_library, notify.clone(), verbose);
+            stack.add_named(&pdf.widget(), Some("pdf"));
             Self {
                 endpoint,
                 window,
@@ -104,7 +109,7 @@ impl Viewer {
                 title,
                 spinner,
                 controls,
-                backends: RefCell::new(HashMap::from([(Kind::Jpeg, image)])),
+                backends: RefCell::new(HashMap::from([(Kind::Jpeg, image), (Kind::Pdf, pdf)])),
                 #[cfg(feature = "video")]
                 notify,
                 video_enabled,
@@ -281,10 +286,10 @@ impl Viewer {
                                 viewer.controls.append(&backend.controls());
                             }
                             viewer.active.set(Some(kind));
-                            viewer.stack.set_visible_child_name(if kind == Kind::Jpeg {
-                                "jpeg"
-                            } else {
-                                "video"
+                            viewer.stack.set_visible_child_name(match kind {
+                                Kind::Jpeg => "jpeg",
+                                Kind::Pdf => "pdf",
+                                Kind::Video => "video",
                             });
                             backend.load(generation, path);
                         }

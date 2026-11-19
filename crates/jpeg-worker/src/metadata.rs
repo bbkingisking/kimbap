@@ -1,4 +1,4 @@
-use kimbap_jpeg_ipc::invalid;
+use kimbap_worker::invalid;
 use std::io;
 
 #[derive(Default)]

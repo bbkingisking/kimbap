@@ -14,7 +14,7 @@ gdk4-wayland = "0.11"
 async-channel = "2"
 libc = "0.2"
 libmpv2-sys = { version = "4", optional = true }
-kimbap-jpeg-ipc = { path = "crates/jpeg-ipc" }
+kimbap-worker = { path = "crates/worker" }
 
 [profile.release]
 lto = "thin"
@@ -22,8 +22,8 @@ codegen-units = 1
 strip = "debuginfo"
 
 [workspace]
-members = ["crates/jpeg-ipc", "crates/jpeg-worker"]
-default-members = [".", "crates/jpeg-worker"]
+members = ["crates/worker", "crates/jpeg-worker", "crates/pdf-worker"]
+default-members = [".", "crates/jpeg-worker", "crates/pdf-worker"]
 resolver = "3"
 
 [features]

@@ -51,6 +51,17 @@ impl Viewport {
         self.offset = offset;
         self.clamp();
     }
+    /// Pixel bounds of the displayed image, including zoom and device density.
+    pub fn raster_size(&self, density: f64, max_edge: u32) -> (u32, u32) {
+        let scale = self.scale() * density;
+        let width = self.image[0] * scale;
+        let height = self.image[1] * scale;
+        let limit = (max_edge as f64 / width.max(height)).min(1.);
+        (
+            (width * limit).round().clamp(1., max_edge as f64) as u32,
+            (height * limit).round().clamp(1., max_edge as f64) as u32,
+        )
+    }
     pub fn bounds(&self) -> [f32; 4] {
         let scale = self.scale();
         [
@@ -64,6 +75,24 @@ impl Viewport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn document_raster_tracks_fractional_density_and_caps_the_page() {
+        let mut view = Viewport {
+            image: [700., 990.],
+            size: [1702., 990.],
+            ..Default::default()
+        };
+        // 150% display scale, two samples per device pixel on each axis.
+        assert_eq!(view.raster_size(1.5 * 2., 4096), (2100, 2970));
+        view.zoom = 1.25;
+        assert_eq!(view.raster_size(3., 4096), (2625, 3713));
+        view.zoom = 2.;
+        assert_eq!(view.raster_size(3., 4096), (2896, 4096));
+        view.image = [2000., 1000.];
+        view.size = [1000., 700.];
+        view.zoom = 1.;
+        assert_eq!(view.raster_size(3., 4096), (3000, 1500));
+    }
     #[test]
     fn pinch_preserves_anchor() {
         let mut view = Viewport {

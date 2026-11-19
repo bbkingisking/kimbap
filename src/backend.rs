@@ -4,12 +4,15 @@ use std::{path::PathBuf, rc::Rc};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
     Jpeg,
+    Pdf,
     Video,
 }
 impl Kind {
     pub fn for_content_type(content_type: &str) -> Option<Self> {
         if gio::content_type_is_a(content_type, "image/jpeg") {
             Some(Self::Jpeg)
+        } else if gio::content_type_is_a(content_type, "application/pdf") {
+            Some(Self::Pdf)
         } else if content_type.starts_with("video/") {
             Some(Self::Video)
         } else {
@@ -49,6 +52,7 @@ mod tests {
             Some(Kind::Video)
         );
         assert_eq!(Kind::for_content_type("video/webm"), Some(Kind::Video));
+        assert_eq!(Kind::for_content_type("application/pdf"), Some(Kind::Pdf));
         assert_eq!(Kind::for_content_type("text/plain"), None);
     }
 }

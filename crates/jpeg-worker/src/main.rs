@@ -1,7 +1,7 @@
 mod metadata;
-mod sandbox;
+use kimbap_worker::sandbox;
 
-use kimbap_jpeg_ipc::{self as ipc, invalid};
+use kimbap_worker::{self as ipc, invalid};
 use std::{
     fs::File,
     io::{self, Write},
@@ -24,7 +24,7 @@ fn run() -> io::Result<()> {
         .set_scan_limit(100)
         .map_err(|e| invalid(e.to_string()))?;
     sandbox::restrict()?;
-    socket.write_all(ipc::MAGIC)?;
+    socket.write_all(ipc::JPEG_MAGIC)?;
     while let Some(bytes) = ipc::read_request(&mut socket)? {
         let start = Instant::now();
         match decode(&mut decoder, &bytes) {

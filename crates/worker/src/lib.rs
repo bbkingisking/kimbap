@@ -1,5 +1,7 @@
-//! Bounded, versioned transport. Pixels cross the sandbox in sealed memfds,
-//! not stdout copies. No GTK, GLib, or decoder dependency belongs here.
+//! Shared native-worker transport and confinement. Pixels cross the sandbox in
+//! sealed memfds, without GTK, GLib, or decoder dependencies.
+pub mod pdf;
+pub mod sandbox;
 use memmap2::Mmap;
 use rustix::{
     fs::{MemfdFlags, SealFlags, fcntl_add_seals, fcntl_get_seals},
@@ -17,7 +19,7 @@ use std::{
 };
 
 pub use memmap2::MmapMut;
-pub const MAGIC: &[u8; 4] = b"KJP1";
+pub const JPEG_MAGIC: &[u8; 4] = b"KJP1";
 pub const MAX_INPUT: usize = 64 * 1024 * 1024;
 pub const MAX_PIXELS: usize = 40_000_000;
 pub const MAX_ERROR: usize = 16 * 1024;
@@ -28,9 +30,9 @@ pub fn invalid(message: impl Into<String>) -> io::Error {
 pub fn pixel_len(width: u32, height: u32) -> io::Result<usize> {
     let pixels = (width as usize)
         .checked_mul(height as usize)
-        .ok_or_else(|| invalid("JPEG dimensions overflow"))?;
+        .ok_or_else(|| invalid("Pixel dimensions overflow"))?;
     if width == 0 || height == 0 || width > 20_000 || height > 20_000 || pixels > MAX_PIXELS {
-        return Err(invalid("JPEG exceeds the 40-megapixel limit"));
+        return Err(invalid("Frame exceeds the 40-megapixel limit"));
     }
     Ok(pixels * 4)
 }
@@ -68,7 +70,7 @@ impl AsRef<[u8]> for Frame {
 
 pub fn write_request(socket: &mut UnixStream, bytes: &[u8]) -> io::Result<()> {
     if bytes.is_empty() || bytes.len() > MAX_INPUT {
-        return Err(invalid("JPEG input exceeds the 64-MiB limit"));
+        return Err(invalid("Input exceeds the 64-MiB limit"));
     }
     socket.write_all(&(bytes.len() as u32).to_le_bytes())?;
     socket.write_all(bytes)
@@ -83,7 +85,7 @@ pub fn read_request(socket: &mut UnixStream) -> io::Result<Option<Vec<u8>>> {
     socket.read_exact(&mut length[1..])?;
     let length = u32::from_le_bytes(length) as usize;
     if length == 0 || length > MAX_INPUT {
-        return Err(invalid("Invalid JPEG request length"));
+        return Err(invalid("Invalid input request length"));
     }
     let mut bytes = vec![0; length];
     socket.read_exact(&mut bytes)?;
@@ -130,7 +132,7 @@ pub fn write_frame(
     }
     Ok(())
 }
-pub fn read_response(socket: &mut UnixStream) -> io::Result<Result<Arc<Frame>, String>> {
+pub fn read_status(socket: &mut UnixStream) -> io::Result<Result<(), String>> {
     let mut tag = [0];
     socket.read_exact(&mut tag)?;
     if tag[0] == 0 {
@@ -148,6 +150,13 @@ pub fn read_response(socket: &mut UnixStream) -> io::Result<Result<Arc<Frame>, S
     }
     if tag[0] != 1 {
         return Err(invalid("Unknown worker response"));
+    }
+    Ok(Ok(()))
+}
+
+pub fn read_response(socket: &mut UnixStream) -> io::Result<Result<Arc<Frame>, String>> {
+    if let Err(message) = read_status(socket)? {
+        return Ok(Err(message));
     }
     let mut header = [0; 16];
     socket.read_exact(&mut header)?;

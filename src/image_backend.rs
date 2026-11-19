@@ -1,25 +1,17 @@
 //! JPEG presentation adapter. Worker scheduling and the canvas remain independent
 //! of the shared preview window and of every other format backend.
-use crate::canvas::ImageCanvas;
+use crate::canvas::{ImageCanvas, Pixels};
 use gtk::{gdk, glib, prelude::*};
 use kimbap::{
     backend::{Backend, Event, Notify},
     jpeg::{Decoder, Reply},
 };
-use kimbap_jpeg_ipc::Frame;
 use std::{
     cell::{Cell, RefCell},
     path::PathBuf,
     rc::Rc,
-    sync::Arc,
     time::Instant,
 };
-struct Pixels(Arc<Frame>);
-impl AsRef<[u8]> for Pixels {
-    fn as_ref(&self) -> &[u8] {
-        &self.0.pixels
-    }
-}
 pub struct ImageBackend {
     canvas: ImageCanvas,
     controls: gtk::Box,

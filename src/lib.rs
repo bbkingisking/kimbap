@@ -177,3 +177,6 @@ pub mod backend;
 pub mod preferences;
 #[cfg(feature = "video")]
 pub mod video;
+
+pub mod pdf;
+mod worker;

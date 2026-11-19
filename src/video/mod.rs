@@ -26,7 +26,12 @@ pub fn initialize() -> Result<(), String> {
 }
 
 pub struct VideoBackend {
+    container: gtk::Box,
     area: gtk::GLArea,
+    progress: gtk::Scale,
+    scrubbing: Cell<bool>,
+    scrolling: Cell<bool>,
+    duration: Cell<f64>,
     button: gtk::Button,
     preferences: Preferences,
     muted: Cell<bool>,
@@ -59,13 +64,26 @@ impl VideoBackend {
             .build();
         area.set_allowed_apis(gdk::GLAPI::GL);
         area.set_required_version(3, 3);
+        let progress = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0., 1., 0.001);
+        progress.set_draw_value(false);
+        progress.set_sensitive(false);
+        progress.set_hexpand(true);
+        progress.add_css_class("video-progress");
+        let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        container.append(&area);
+        container.append(&progress);
         let muted = preferences.muted().unwrap_or(true);
         let button = gtk::Button::with_label(if muted { "Unmute" } else { "Mute" });
         let (control, signals) = Control::new(hwdec, ao);
         control.mute(muted);
         let (wake, updates) = async_channel::bounded(1);
         let backend = Rc::new(Self {
+            container,
             area,
+            progress,
+            scrubbing: Cell::new(false),
+            scrolling: Cell::new(false),
+            duration: Cell::new(0.),
             button,
             preferences,
             muted: Cell::new(muted),
@@ -84,6 +102,73 @@ impl VideoBackend {
             tasks: RefCell::new(Vec::new()),
             wake,
         });
+        let weak = Rc::downgrade(&backend);
+        backend.progress.connect_change_value(move |_, _, value| {
+            if let Some(v) = weak.upgrade()
+                && let Some(control) = v.control.borrow().as_ref()
+            {
+                control.seek(v.generation.get(), value.clamp(0., 1.));
+            }
+            glib::Propagation::Proceed
+        });
+        // Playback updates must not move the handle while the user drags it.
+        let pointer = gtk::EventControllerLegacy::new();
+        pointer.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(&backend);
+        pointer.connect_event(move |_, event| {
+            if let Some(v) = weak.upgrade() {
+                match event.event_type() {
+                    gdk::EventType::ButtonPress | gdk::EventType::TouchBegin => {
+                        v.scrubbing.set(true);
+                    }
+                    gdk::EventType::ButtonRelease
+                    | gdk::EventType::TouchEnd
+                    | gdk::EventType::TouchCancel => v.scrubbing.set(false),
+                    _ => (),
+                }
+            }
+            glib::Propagation::Proceed
+        });
+        backend.progress.add_controller(pointer);
+        let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
+        // Capture over both the video and the scale before the scale's own
+        // scroll handler, which uses a duration-dependent adjustment step.
+        scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(&backend);
+        scroll.connect_scroll_begin(move |_| {
+            if let Some(v) = weak.upgrade() {
+                v.scrolling.set(true);
+            }
+        });
+        let weak = Rc::downgrade(&backend);
+        scroll.connect_scroll_end(move |_| {
+            if let Some(v) = weak.upgrade() {
+                v.scrolling.set(false);
+            }
+        });
+        let weak = Rc::downgrade(&backend);
+        scroll.connect_scroll(move |controller, dx, dy| {
+            let Some(v) = weak.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            if !v.progress.is_sensitive() || !dx.is_finite() || dx.abs() <= dy.abs() {
+                return glib::Propagation::Proceed;
+            }
+            // Surface deltas are pixels: 100 px moves ten seconds regardless
+            // of clip length. Wheel devices report discrete steps instead.
+            let seconds = if controller.unit() == gdk::ScrollUnit::Wheel {
+                dx * 5.
+            } else {
+                dx * 0.1
+            };
+            let fraction = (v.progress.value() + seconds / v.duration.get()).clamp(0., 1.);
+            v.progress.set_value(fraction);
+            if let Some(control) = v.control.borrow().as_ref() {
+                control.seek(v.generation.get(), fraction);
+            }
+            glib::Propagation::Stop
+        });
+        backend.container.add_controller(scroll);
         let weak = Rc::downgrade(&backend);
         backend.area.connect_realize(move |_| {
             if let Some(v) = weak.upgrade() {
@@ -247,6 +332,24 @@ impl VideoBackend {
                 generation,
                 message,
             } if generation == self.generation.get() => self.failed(message),
+            Signal::Progress {
+                generation,
+                position,
+                duration,
+                seekable,
+            } if generation == self.generation.get() => {
+                let fraction = if position.is_finite() && duration.is_finite() && duration > 0. {
+                    (position / duration).clamp(0., 1.)
+                } else {
+                    0.
+                };
+                self.duration.set(duration);
+                self.progress
+                    .set_sensitive(seekable && duration.is_finite() && duration > 0.);
+                if !self.scrubbing.get() && !self.scrolling.get() {
+                    self.progress.set_value(fraction);
+                }
+            }
             Signal::Stats(stats) if stats.generation == self.generation.get() => {
                 log::debug!(
                     "video-stats generation={} codec={} hwdec={} position={:.3} duration={:.3} dropped={} decoder_dropped={} eof={} pause={:?} paused_for_cache={:?} mute={} mapped={} render_wakes={} render_calls={} frames={}",
@@ -309,13 +412,18 @@ impl VideoBackend {
 }
 impl Backend for VideoBackend {
     fn widget(&self) -> gtk::Widget {
-        self.area.clone().upcast()
+        self.container.clone().upcast()
     }
     fn controls(&self) -> gtk::Widget {
         self.button.clone().upcast()
     }
     fn load(&self, generation: u64, path: PathBuf) {
         self.generation.set(generation);
+        self.scrubbing.set(false);
+        self.scrolling.set(false);
+        self.duration.set(0.);
+        self.progress.set_value(0.);
+        self.progress.set_sensitive(false);
         self.info.set(None);
         self.ready.set(None);
         self.frames.set(0);
@@ -338,6 +446,11 @@ impl Backend for VideoBackend {
             self.generation.get()
         );
         self.generation.set(generation);
+        self.scrubbing.set(false);
+        self.scrolling.set(false);
+        self.duration.set(0.);
+        self.progress.set_value(0.);
+        self.progress.set_sensitive(false);
         self.info.set(None);
         self.ready.set(None);
         if let Some(control) = self.control.borrow().as_ref() {

@@ -153,6 +153,7 @@ pub struct Target {
 struct State {
     target: Option<Option<Target>>,
     muted: Option<bool>,
+    seek: Option<(u64, f64)>,
     renderer: bool,
     shutdown: bool,
     serial: u64,
@@ -181,6 +182,12 @@ pub struct Stats {
 }
 pub enum Signal {
     Core(Arc<Core>),
+    Progress {
+        generation: u64,
+        position: f64,
+        duration: f64,
+        seekable: bool,
+    },
     Info {
         generation: u64,
         width: i32,
@@ -230,6 +237,16 @@ impl Control {
         state.serial = state.serial.wrapping_add(1);
         self.queue.wake.notify_one();
     }
+    pub fn seek(&self, generation: u64, fraction: f64) {
+        if !fraction.is_finite() {
+            return;
+        }
+        let mut state = self.queue.state.lock().unwrap();
+        // Coalesce drag motion so the control thread always seeks to the latest point.
+        state.seek = Some((generation, fraction.clamp(0., 1.)));
+        state.serial = state.serial.wrapping_add(1);
+        self.queue.wake.notify_one();
+    }
     pub fn renderer(&self, ready: bool) {
         let mut state = self.queue.state.lock().unwrap();
         state.renderer = ready;
@@ -272,8 +289,9 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
     let mut wanted: Option<Target> = None;
     let mut loaded = None;
     let mut next_stats = Instant::now();
+    let mut next_progress = Instant::now();
     loop {
-        let (target, muted, renderer, serial) = {
+        let (target, muted, seek, renderer, serial) = {
             let mut state = queue.state.lock().unwrap();
             if state.shutdown {
                 break;
@@ -281,6 +299,7 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
             (
                 state.target.take(),
                 state.muted.take(),
+                state.seek.take(),
                 state.renderer,
                 state.serial,
             )
@@ -304,6 +323,20 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
                 wanted.as_ref().map(|t| t.generation)
             );
             core.stop();
+        }
+        if let Some((generation, fraction)) = seek
+            && wanted.as_ref().map(|t| t.generation) == Some(generation)
+            && loaded == Some(generation)
+            && active.and_then(|id| entries.get(&id)).copied() == Some(generation)
+        {
+            let result = core.command(&[
+                CString::new("seek").unwrap(),
+                CString::new((fraction * 100.).to_string()).unwrap(),
+                CString::new("absolute-percent+exact").unwrap(),
+            ]);
+            if let Err(message) = result {
+                log::warn!("video seek failed: {message}");
+            }
         }
         if renderer
             && let Some(target) = &wanted
@@ -441,6 +474,20 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
                 _ => (),
             }
         }
+        if Instant::now() >= next_progress {
+            next_progress = Instant::now() + Duration::from_millis(100);
+            if let Some(generation) = active.and_then(|id| entries.get(&id)).copied() {
+                emit(
+                    &send,
+                    Signal::Progress {
+                        generation,
+                        position: core.double(c"time-pos").unwrap_or(0.),
+                        duration: core.double(c"duration").unwrap_or(0.),
+                        seekable: core.flag(c"seekable").unwrap_or(false),
+                    },
+                );
+            }
+        }
         if log::log_enabled!(target: "kimbap::video", log::Level::Debug)
             && Instant::now() >= next_stats
         {
@@ -469,6 +516,7 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
             && state.serial == serial
             && state.target.is_none()
             && state.muted.is_none()
+            && state.seek.is_none()
         {
             let _ = queue
                 .wake

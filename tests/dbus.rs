@@ -388,7 +388,8 @@ impl TestProcess {
     fn start() -> Self {
         let log = std::env::temp_dir().join(format!("kimbap-test-{}.log", std::process::id()));
         let child = Process::new(env!("CARGO_BIN_EXE_kimbap"))
-            .args(["--verbose", "--transport-only"])
+            .arg("--transport-only")
+            .env("RUST_LOG", "kimbap=debug")
             .stdout(Stdio::null())
             .stderr(File::create(&log).unwrap())
             .spawn()

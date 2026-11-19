@@ -27,4 +27,4 @@ PDF sandbox test additionally needs a library:
 PDFIUM_LIBRARY=/absolute/path/to/libpdfium.so cargo test -p kimbap-pdf-worker --test sandbox -- --ignored
 ```
 
-For an isolated preview session, run `target/release/kimbap --bus-name dev.kimbap.Previewer --verbose`.
+For an isolated preview session, run `RUST_LOG=kimbap=debug target/release/kimbap --bus-name dev.kimbap.Previewer`.

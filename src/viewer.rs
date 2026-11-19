@@ -31,7 +31,6 @@ pub struct Viewer {
     routing: RefCell<Option<glib::JoinHandle<()>>>,
     loading: RefCell<Option<glib::SourceId>>,
     started: Cell<Option<Instant>>,
-    verbose: bool,
     paint: RefCell<Option<(gdk::FrameClock, glib::SignalHandlerId)>>,
 }
 impl Viewer {
@@ -40,7 +39,6 @@ impl Viewer {
         worker: PathBuf,
         pdf_worker: PathBuf,
         pdfium_library: PathBuf,
-        verbose: bool,
         video_enabled: bool,
     ) -> Result<Rc<Self>, glib::Error> {
         let css = gtk::CssProvider::new();
@@ -96,10 +94,9 @@ impl Viewer {
                     v.backend_event(event);
                 }
             });
-            let image: Rc<dyn Backend> = ImageBackend::new(worker, notify.clone(), verbose);
+            let image: Rc<dyn Backend> = ImageBackend::new(worker, notify.clone());
             stack.add_named(&image.widget(), Some("jpeg"));
-            let pdf: Rc<dyn Backend> =
-                PdfBackend::new(pdf_worker, pdfium_library, notify.clone(), verbose);
+            let pdf: Rc<dyn Backend> = PdfBackend::new(pdf_worker, pdfium_library, notify.clone());
             stack.add_named(&pdf.widget(), Some("pdf"));
             Self {
                 endpoint,
@@ -119,7 +116,6 @@ impl Viewer {
                 routing: RefCell::new(None),
                 loading: RefCell::new(None),
                 started: Cell::new(None),
-                verbose,
                 paint: RefCell::new(None),
             }
         });
@@ -176,7 +172,6 @@ impl Viewer {
                 let backend: Rc<dyn Backend> = kimbap::video::VideoBackend::new(
                     preferences,
                     self.notify.clone(),
-                    self.verbose,
                     "auto".into(),
                     None,
                 );
@@ -368,7 +363,7 @@ impl Viewer {
     }
     fn trace_paint(self: &Rc<Self>, generation: u64) {
         self.cancel_paint();
-        if !self.verbose {
+        if !log::log_enabled!(log::Level::Debug) {
             return;
         }
         if let Some(clock) = self.window.frame_clock() {
@@ -377,8 +372,8 @@ impl Viewer {
                 if let Some(v) = weak.upgrade() {
                     v.cancel_paint();
                     if v.generation.get() == generation {
-                        eprintln!(
-                            "kimbap: backend painted generation={generation} total_us={}",
+                        log::debug!(
+                            "backend painted generation={generation} total_us={}",
                             v.started
                                 .get()
                                 .map(|t| t.elapsed().as_micros())
@@ -432,11 +427,9 @@ impl Viewer {
         self.publish(String::new());
     }
     fn event(&self, event: NautilusEvent) {
-        if self.verbose
-            && let NautilusEvent::Selection(direction) = &event
-        {
-            eprintln!(
-                "kimbap: selection direction={} at_us={}",
+        if let NautilusEvent::Selection(direction) = &event {
+            log::debug!(
+                "selection direction={} at_us={}",
                 *direction as u32,
                 glib::monotonic_time()
             );

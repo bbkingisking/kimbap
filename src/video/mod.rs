@@ -43,13 +43,11 @@ pub struct VideoBackend {
     started: Cell<Instant>,
     tasks: RefCell<Vec<glib::JoinHandle<()>>>,
     wake: async_channel::Sender<()>,
-    verbose: bool,
 }
 impl VideoBackend {
     pub fn new(
         preferences: Preferences,
         notify: Notify,
-        verbose: bool,
         hwdec: String,
         ao: Option<String>,
     ) -> Rc<Self> {
@@ -83,7 +81,6 @@ impl VideoBackend {
             started: Cell::new(Instant::now()),
             tasks: RefCell::new(Vec::new()),
             wake,
-            verbose,
         });
         let weak = Rc::downgrade(&backend);
         backend.area.connect_realize(move |_| {
@@ -106,9 +103,9 @@ impl VideoBackend {
                 return glib::Propagation::Stop;
             };
             v.calls.set(v.calls.get() + 1);
-            if v.verbose && v.calls.get() < 5 {
-                eprintln!(
-                    "kimbap: GL render call={} size={}x{} scale={} renderer={}",
+            if v.calls.get() < 5 {
+                log::debug!(
+                    "GL render call={} size={}x{} scale={} renderer={}",
                     v.calls.get(),
                     v.area.width(),
                     v.area.height(),
@@ -239,9 +236,9 @@ impl VideoBackend {
                 generation,
                 message,
             } if generation == self.generation.get() => self.failed(message),
-            Signal::Stats(stats) if stats.generation == self.generation.get() && self.verbose => {
-                eprintln!(
-                    "kimbap: video-stats generation={} codec={} hwdec={} position={:.3} duration={:.3} dropped={} decoder_dropped={} eof={} mute={} renders={}",
+            Signal::Stats(stats) if stats.generation == self.generation.get() => {
+                log::debug!(
+                    "video-stats generation={} codec={} hwdec={} position={:.3} duration={:.3} dropped={} decoder_dropped={} eof={} mute={} renders={}",
                     stats.generation,
                     stats.codec,
                     stats.hwdec,
@@ -263,12 +260,10 @@ impl VideoBackend {
             && self.ready.get() != Some(generation)
         {
             self.ready.set(Some(generation));
-            if self.verbose {
-                eprintln!(
-                    "kimbap: video-ready generation={generation} size={width}x{height} elapsed_us={}",
-                    self.started.get().elapsed().as_micros()
-                );
-            }
+            log::debug!(
+                "video-ready generation={generation} size={width}x{height} elapsed_us={}",
+                self.started.get().elapsed().as_micros()
+            );
             (self.notify)(Event::Ready {
                 generation,
                 width,

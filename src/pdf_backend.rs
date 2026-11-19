@@ -30,10 +30,9 @@ pub struct PdfBackend {
     ready: Cell<bool>,
     resize: RefCell<Option<glib::SourceId>>,
     task: RefCell<Option<glib::JoinHandle<()>>>,
-    verbose: bool,
 }
 impl PdfBackend {
-    pub fn new(worker: PathBuf, library: PathBuf, notify: Notify, verbose: bool) -> Rc<Self> {
+    pub fn new(worker: PathBuf, library: PathBuf, notify: Notify) -> Rc<Self> {
         let (decoder, receive) = Decoder::new(worker, library);
         let backend = Rc::new(Self {
             canvas: ImageCanvas::for_document(),
@@ -53,7 +52,6 @@ impl PdfBackend {
             ready: Cell::new(false),
             resize: RefCell::new(None),
             task: RefCell::new(None),
-            verbose,
         });
         backend
             .previous
@@ -173,20 +171,18 @@ impl PdfBackend {
             return;
         }
         self.bounds.set(bounds);
-        if self.verbose {
-            eprintln!(
-                "kimbap: PDF render viewport={}x{} scale={} target={}x{}",
-                self.canvas.width(),
-                self.canvas.height(),
-                self.canvas
-                    .native()
-                    .and_then(|n| n.surface())
-                    .map(|s| s.scale())
-                    .unwrap_or(1.),
-                bounds.0,
-                bounds.1
-            );
-        }
+        log::debug!(
+            "PDF render viewport={}x{} scale={} target={}x{}",
+            self.canvas.width(),
+            self.canvas.height(),
+            self.canvas
+                .native()
+                .and_then(|n| n.surface())
+                .map(|s| s.scale())
+                .unwrap_or(1.),
+            bounds.0,
+            bounds.1
+        );
         self.revision.set(self.decoder.render(
             self.generation.get(),
             path,
@@ -247,19 +243,17 @@ impl PdfBackend {
                 if self.canvas.render_bounds(Some(page_size)) != self.bounds.get() {
                     self.schedule_render();
                 }
-                if self.verbose {
-                    eprintln!(
-                        "kimbap: PDF ready generation={} page={}/{} size={}x{} render_us={} load_us={} cache={}",
-                        reply.generation,
-                        reply.page + 1,
-                        rendered.pages,
-                        width,
-                        height,
-                        decode_us,
-                        rendered.elapsed.as_micros(),
-                        rendered.cache_hit
-                    );
-                }
+                log::debug!(
+                    "PDF ready generation={} page={}/{} size={}x{} render_us={} load_us={} cache={}",
+                    reply.generation,
+                    reply.page + 1,
+                    rendered.pages,
+                    width,
+                    height,
+                    decode_us,
+                    rendered.elapsed.as_micros(),
+                    rendered.cache_hit
+                );
                 // Resizing after every zoom render would resize the window and
                 // trigger another render. Only the first page sizes the shell.
                 if !self.ready.replace(true) {

@@ -7,6 +7,10 @@ use kimbap::{
 };
 use std::{path::PathBuf, rc::Rc, time::Duration};
 fn main() {
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("kimbap::video=debug"),
+    )
+    .init();
     let mut args = std::env::args().skip(1);
     let file = PathBuf::from(args.next().expect("video filename"));
     let seconds = args.next().map(|v| v.parse::<u64>().unwrap()).unwrap_or(12);
@@ -40,7 +44,6 @@ fn main() {
             } => eprintln!("probe ready {generation} {width}x{height}"),
             Event::Failed { message, .. } => eprintln!("probe error: {message}"),
         }),
-        true,
         mode,
         std::env::var("KIMBAP_TEST_AO").ok(),
     );

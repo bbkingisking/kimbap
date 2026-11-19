@@ -20,10 +20,9 @@ pub struct ImageBackend {
     generation: Cell<u64>,
     task: RefCell<Option<glib::JoinHandle<()>>>,
     started: Cell<Instant>,
-    verbose: bool,
 }
 impl ImageBackend {
-    pub fn new(worker: PathBuf, notify: Notify, verbose: bool) -> Rc<Self> {
+    pub fn new(worker: PathBuf, notify: Notify) -> Rc<Self> {
         let canvas = ImageCanvas::new();
         let controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let (decoder, receive) = Decoder::new(worker);
@@ -35,7 +34,6 @@ impl ImageBackend {
             generation: Cell::new(0),
             task: RefCell::new(None),
             started: Cell::new(Instant::now()),
-            verbose,
         });
         for (label, tooltip, action) in [
             ("−", "Zoom out", 0),
@@ -87,18 +85,16 @@ impl ImageBackend {
                     width as usize * 4,
                 );
                 self.canvas.set_texture(Some(texture.upcast_ref()));
-                if self.verbose {
-                    eprintln!(
-                        "kimbap: image ready generation={} size={}x{} decode_us={} load_us={} cache={} elapsed_us={}",
-                        reply.generation,
-                        width,
-                        height,
-                        decode_us,
-                        decoded.elapsed.as_micros(),
-                        decoded.cache_hit,
-                        self.started.get().elapsed().as_micros()
-                    );
-                }
+                log::debug!(
+                    "image ready generation={} size={}x{} decode_us={} load_us={} cache={} elapsed_us={}",
+                    reply.generation,
+                    width,
+                    height,
+                    decode_us,
+                    decoded.elapsed.as_micros(),
+                    decoded.cache_hit,
+                    self.started.get().elapsed().as_micros()
+                );
                 (self.notify)(Event::Ready {
                     generation: reply.generation,
                     width,

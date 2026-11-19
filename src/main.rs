@@ -22,6 +22,7 @@ use kimbap::{BUS_NAME, Command, PreviewEndpoint};
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 fn main() -> ExitCode {
+    env_logger::init();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -33,7 +34,6 @@ fn main() -> ExitCode {
 
 fn run() -> Result<()> {
     let mut bus_name = BUS_NAME.to_owned();
-    let mut verbose = false;
     let mut transport_only = false;
     let mut experimental_video = false;
     let mut worker = std::env::current_exe()?.with_file_name("kimbap-jpeg-worker");
@@ -43,7 +43,6 @@ fn run() -> Result<()> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--bus-name" => bus_name = args.next().ok_or("--bus-name requires a name")?,
-            "--verbose" => verbose = true,
             "--transport-only" => transport_only = true,
             "--experimental-video" => experimental_video = true,
             "--jpeg-worker" => {
@@ -62,15 +61,15 @@ fn run() -> Result<()> {
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: kimbap [--bus-name NAME] [--verbose] [--jpeg-worker PATH] [--pdf-worker PATH] [--pdfium-library PATH] [--transport-only] [--experimental-video]\n\n\
+                    "Usage: kimbap [--bus-name NAME] [--jpeg-worker PATH] [--pdf-worker PATH] [--pdfium-library PATH] [--transport-only] [--experimental-video]\n\n\
                      Format backends in a shared GTK4 preview window.\n\n\
                      --bus-name NAME  Alternative name for isolated development\n\
-                     --verbose        Log commands and rendering timings (activation tokens omitted)\n\
                      --jpeg-worker    Path to the bundled decoder executable\n\
                      --pdf-worker     Path to the bundled PDF renderer executable\n\
                      --pdfium-library Path to libpdfium.so (default: beside kimbap)\n\
                      --transport-only Export the no-op interface without a display\n\
-                     --experimental-video Enable the experimental libmpv backend"
+                     --experimental-video Enable the experimental libmpv backend\n\n\
+                     Set RUST_LOG=kimbap=debug for command and rendering diagnostics."
                 );
                 return Ok(());
             }
@@ -113,18 +112,16 @@ fn run() -> Result<()> {
     let ui: Rc<RefCell<Weak<viewer::Viewer>>> = Rc::new(RefCell::new(Weak::new()));
     let dispatch = ui.clone();
     let endpoint = Rc::new(PreviewEndpoint::export(&connection, move |command| {
-        if verbose {
-            match &command {
-                Command::ShowFile(request) => eprintln!(
-                    "kimbap: ShowFile uri={:?} parent={} close_if_already_shown={} activation={} at_us={}",
-                    request.uri,
-                    !request.window_handle.is_empty(),
-                    request.close_if_already_shown,
-                    !request.activation_token.is_empty(),
-                    glib::monotonic_time(),
-                ),
-                Command::Close => eprintln!("kimbap: Close"),
-            }
+        match &command {
+            Command::ShowFile(request) => log::debug!(
+                "ShowFile uri={:?} parent={} close_if_already_shown={} activation={} at_us={}",
+                request.uri,
+                !request.window_handle.is_empty(),
+                request.close_if_already_shown,
+                !request.activation_token.is_empty(),
+                glib::monotonic_time(),
+            ),
+            Command::Close => log::debug!("Close"),
         }
         if let Some(viewer) = dispatch.borrow().upgrade() {
             viewer.handle(command);
@@ -138,7 +135,6 @@ fn run() -> Result<()> {
             worker,
             pdf_worker,
             pdfium_library,
-            verbose,
             experimental_video,
         )?)
     };

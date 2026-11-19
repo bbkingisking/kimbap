@@ -407,7 +407,9 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
                 _ => (),
             }
         }
-        if Instant::now() >= next_stats {
+        if log::log_enabled!(target: "kimbap::video", log::Level::Debug)
+            && Instant::now() >= next_stats
+        {
             next_stats = Instant::now() + Duration::from_secs(1);
             if let Some(generation) = active.and_then(|id| entries.get(&id)).copied() {
                 emit(

@@ -40,6 +40,7 @@ pub struct VideoBackend {
     ready: Cell<Option<u64>>,
     frames: Cell<u64>,
     calls: Cell<u64>,
+    render_wakes: Cell<u64>,
     started: Cell<Instant>,
     tasks: RefCell<Vec<glib::JoinHandle<()>>>,
     wake: async_channel::Sender<()>,
@@ -78,6 +79,7 @@ impl VideoBackend {
             ready: Cell::new(None),
             frames: Cell::new(0),
             calls: Cell::new(0),
+            render_wakes: Cell::new(0),
             started: Cell::new(Instant::now()),
             tasks: RefCell::new(Vec::new()),
             wake,
@@ -155,6 +157,7 @@ impl VideoBackend {
                 let Some(v) = weak.upgrade() else {
                     break;
                 };
+                v.render_wakes.set(v.render_wakes.get() + 1);
                 v.area.queue_render();
             }
         });
@@ -183,6 +186,10 @@ impl VideoBackend {
             .unwrap_or(std::ptr::null_mut());
         match Renderer::new(core, display, self.wake.clone()) {
             Ok(renderer) => {
+                log::debug!(
+                    "video renderer created generation={}",
+                    self.generation.get()
+                );
                 self.renderer.replace(Some(renderer));
                 if let Some(control) = self.control.borrow().as_ref() {
                     control.renderer(true);
@@ -202,6 +209,10 @@ impl VideoBackend {
             control.stop();
         }
         if self.renderer.borrow().is_some() {
+            log::debug!(
+                "video renderer released generation={}",
+                self.generation.get()
+            );
             self.area.make_current();
             self.renderer.borrow_mut().take();
         }
@@ -238,7 +249,7 @@ impl VideoBackend {
             } if generation == self.generation.get() => self.failed(message),
             Signal::Stats(stats) if stats.generation == self.generation.get() => {
                 log::debug!(
-                    "video-stats generation={} codec={} hwdec={} position={:.3} duration={:.3} dropped={} decoder_dropped={} eof={} mute={} renders={}",
+                    "video-stats generation={} codec={} hwdec={} position={:.3} duration={:.3} dropped={} decoder_dropped={} eof={} pause={:?} paused_for_cache={:?} mute={} mapped={} render_wakes={} render_calls={} frames={}",
                     stats.generation,
                     stats.codec,
                     stats.hwdec,
@@ -247,7 +258,12 @@ impl VideoBackend {
                     stats.dropped,
                     stats.decoder_dropped,
                     stats.eof,
+                    stats.paused,
+                    stats.paused_for_cache,
                     stats.muted,
+                    self.area.is_mapped(),
+                    self.render_wakes.get(),
+                    self.calls.get(),
                     self.frames.get()
                 );
             }
@@ -303,6 +319,9 @@ impl Backend for VideoBackend {
         self.info.set(None);
         self.ready.set(None);
         self.frames.set(0);
+        self.calls.set(0);
+        self.render_wakes.set(0);
+        log::debug!("video load requested generation={generation}");
         self.started.set(Instant::now());
         if let Some(message) = self.initialization_error.borrow().clone() {
             self.failed(message);
@@ -314,6 +333,10 @@ impl Backend for VideoBackend {
         }
     }
     fn stop(&self, generation: u64) {
+        log::debug!(
+            "video stop requested generation={generation} previous={}",
+            self.generation.get()
+        );
         self.generation.set(generation);
         self.info.set(None);
         self.ready.set(None);

@@ -175,6 +175,8 @@ pub struct Stats {
     pub dropped: i64,
     pub decoder_dropped: i64,
     pub eof: bool,
+    pub paused: Option<bool>,
+    pub paused_for_cache: Option<bool>,
     pub muted: bool,
 }
 pub enum Signal {
@@ -297,6 +299,10 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
         if let Some(target) = target {
             wanted = target;
             loaded = None;
+            log::debug!(
+                "mpv target generation={:?} renderer_ready={renderer}",
+                wanted.as_ref().map(|t| t.generation)
+            );
             core.stop();
         }
         if renderer
@@ -317,6 +323,7 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
                     continue;
                 }
             };
+            log::debug!("mpv loadfile generation={}", target.generation);
             match core.command(&[
                 CString::new("loadfile").unwrap(),
                 path,
@@ -362,6 +369,11 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
                 raw::mpv_event_id_MPV_EVENT_START_FILE => {
                     let data = unsafe { &*event.data.cast::<raw::mpv_event_start_file>() };
                     active = Some(data.playlist_entry_id);
+                    log::debug!(
+                        "mpv start-file entry={} generation={:?}",
+                        data.playlist_entry_id,
+                        entries.get(&data.playlist_entry_id)
+                    );
                 }
                 // FILE_LOADED can still expose the previous VO dimensions while the
                 // replacement decoder initializes. Wait until playback restarts.
@@ -369,6 +381,7 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
                     if let Some(generation) = active.and_then(|id| entries.get(&id)).copied() {
                         let w = core.int(c"dwidth").unwrap_or(0);
                         let h = core.int(c"dheight").unwrap_or(0);
+                        log::debug!("mpv playback-restart generation={generation} size={w}x{h}");
                         if w > 0 && h > 0 {
                             emit(
                                 &send,
@@ -383,6 +396,20 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
                 }
                 raw::mpv_event_id_MPV_EVENT_END_FILE => {
                     let data = unsafe { &*event.data.cast::<raw::mpv_event_end_file>() };
+                    let reason = match data.reason {
+                        raw::mpv_end_file_reason_MPV_END_FILE_REASON_EOF => "eof",
+                        raw::mpv_end_file_reason_MPV_END_FILE_REASON_STOP => "stop",
+                        raw::mpv_end_file_reason_MPV_END_FILE_REASON_QUIT => "quit",
+                        raw::mpv_end_file_reason_MPV_END_FILE_REASON_ERROR => "error",
+                        raw::mpv_end_file_reason_MPV_END_FILE_REASON_REDIRECT => "redirect",
+                        _ => "unknown",
+                    };
+                    log::debug!(
+                        "mpv end-file entry={} generation={:?} reason={reason} error={}",
+                        data.playlist_entry_id,
+                        entries.get(&data.playlist_entry_id),
+                        data.error
+                    );
                     if active == Some(data.playlist_entry_id) {
                         active = None;
                     }
@@ -404,7 +431,13 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
                     let text = unsafe { CStr::from_ptr(data.text) }.to_string_lossy();
                     eprint!("kimbap mpv [{prefix}]: {text}");
                 }
-                raw::mpv_event_id_MPV_EVENT_SHUTDOWN => return,
+                raw::mpv_event_id_MPV_EVENT_QUEUE_OVERFLOW => {
+                    eprintln!("kimbap: mpv event queue overflow");
+                }
+                raw::mpv_event_id_MPV_EVENT_SHUTDOWN => {
+                    log::debug!("mpv shutdown");
+                    return;
+                }
                 _ => (),
             }
         }
@@ -424,6 +457,8 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
                         dropped: core.int(c"frame-drop-count").unwrap_or(0),
                         decoder_dropped: core.int(c"decoder-frame-drop-count").unwrap_or(0),
                         eof: core.flag(c"eof-reached").unwrap_or(false),
+                        paused: core.flag(c"pause"),
+                        paused_for_cache: core.flag(c"paused-for-cache"),
                         muted: core.flag(c"mute").unwrap_or(true),
                     }),
                 );

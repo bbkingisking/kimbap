@@ -58,6 +58,7 @@ impl Core {
             ("vo", "libmpv"),
             ("idle", "yes"),
             ("keep-open", "yes"),
+            ("reset-on-next-file", "pause"),
             ("loop-file", "no"),
             ("audio-display", "no"),
             ("osd-level", "0"),

@@ -1,6 +1,7 @@
 mod canvas;
 mod image_backend;
 mod pdf_backend;
+mod text_backend;
 mod viewer;
 
 use std::{

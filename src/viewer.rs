@@ -1,6 +1,6 @@
 //! The preview shell owns window/activation/navigation state. Format backends
 //! supply a widget, controls, and generation-tagged readiness/failure events.
-use crate::{image_backend::ImageBackend, pdf_backend::PdfBackend};
+use crate::{image_backend::ImageBackend, pdf_backend::PdfBackend, text_backend::TextBackend};
 use gtk::{gdk, glib, prelude::*};
 use kimbap::{
     Command, Direction, Event as NautilusEvent, PreviewEndpoint, PreviewRequest, WindowState,
@@ -41,7 +41,7 @@ impl Viewer {
         video_enabled: bool,
     ) -> Result<Rc<Self>, glib::Error> {
         let css = gtk::CssProvider::new();
-        css.load_from_string(".kimbap {background:#181616;color:#c5c9c5;font-family:Pretendard,sans-serif;} .kimbap headerbar {background:#0d0c0c;color:#c5c9c5;} .kimbap .preview-error {color:#c4746e;padding:32px;} .kimbap button {color:#c5c9c5;} .kimbap .video-progress highlight {background:#8ba4b0;}");
+        css.load_from_string(".kimbap {background:#181616;color:#c5c9c5;font-family:Pretendard,sans-serif;} .kimbap headerbar {background:#0d0c0c;color:#c5c9c5;} .kimbap .preview-error {color:#c4746e;padding:32px;} .kimbap button {color:#c5c9c5;} .kimbap .text-preview {background:#181616;color:#c5c9c5;font-family:\"IBM Plex Mono\",monospace;} .kimbap .video-progress highlight {background:#8ba4b0;}");
         if let Some(display) = gdk::Display::default() {
             gtk::style_context_add_provider_for_display(
                 &display,
@@ -97,6 +97,8 @@ impl Viewer {
             stack.add_named(&image.widget(), Some("image"));
             let pdf: Rc<dyn Backend> = PdfBackend::new(pdf_worker, notify.clone());
             stack.add_named(&pdf.widget(), Some("pdf"));
+            let text: Rc<dyn Backend> = TextBackend::new(notify.clone());
+            stack.add_named(&text.widget(), Some("text"));
             Self {
                 endpoint,
                 window,
@@ -105,7 +107,11 @@ impl Viewer {
                 title,
                 spinner,
                 controls,
-                backends: RefCell::new(HashMap::from([(Kind::Image, image), (Kind::Pdf, pdf)])),
+                backends: RefCell::new(HashMap::from([
+                    (Kind::Image, image),
+                    (Kind::Pdf, pdf),
+                    (Kind::Text, text),
+                ])),
                 #[cfg(feature = "video")]
                 notify,
                 video_enabled,
@@ -256,11 +262,7 @@ impl Viewer {
                         viewer.failure("This item is not a supported regular file");
                         return;
                     }
-                    let kind = info
-                        .content_type()
-                        .as_deref()
-                        .and_then(Kind::for_content_type);
-                    let Some(kind) = kind else {
+                    let Some(kind) = Kind::for_file(info.content_type().as_deref(), &path) else {
                         viewer.failure("This file type does not have a preview backend yet");
                         return;
                     };
@@ -284,6 +286,7 @@ impl Viewer {
                                 Kind::Image => "image",
                                 Kind::Pdf => "pdf",
                                 Kind::Video => "video",
+                                Kind::Text => "text",
                             });
                             backend.load(generation, path);
                         }

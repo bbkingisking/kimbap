@@ -154,6 +154,7 @@ struct State {
     target: Option<Option<Target>>,
     muted: Option<bool>,
     seek: Option<(u64, f64)>,
+    paused: Option<(u64, bool)>,
     renderer: bool,
     shutdown: bool,
     serial: u64,
@@ -187,6 +188,7 @@ pub enum Signal {
         position: f64,
         duration: f64,
         seekable: bool,
+        paused: bool,
     },
     Info {
         generation: u64,
@@ -234,6 +236,12 @@ impl Control {
     pub fn mute(&self, muted: bool) {
         let mut state = self.queue.state.lock().unwrap();
         state.muted = Some(muted);
+        state.serial = state.serial.wrapping_add(1);
+        self.queue.wake.notify_one();
+    }
+    pub fn pause(&self, generation: u64, paused: bool) {
+        let mut state = self.queue.state.lock().unwrap();
+        state.paused = Some((generation, paused));
         state.serial = state.serial.wrapping_add(1);
         self.queue.wake.notify_one();
     }
@@ -291,7 +299,7 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
     let mut next_stats = Instant::now();
     let mut next_progress = Instant::now();
     loop {
-        let (target, muted, seek, renderer, serial) = {
+        let (target, muted, seek, paused, renderer, serial) = {
             let mut state = queue.state.lock().unwrap();
             if state.shutdown {
                 break;
@@ -300,6 +308,7 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
                 state.target.take(),
                 state.muted.take(),
                 state.seek.take(),
+                state.paused.take(),
                 state.renderer,
                 state.serial,
             )
@@ -323,6 +332,30 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
                 wanted.as_ref().map(|t| t.generation)
             );
             core.stop();
+        }
+        if let Some((generation, paused)) = paused
+            && wanted.as_ref().map(|t| t.generation) == Some(generation)
+            && loaded == Some(generation)
+            && active.and_then(|id| entries.get(&id)).copied() == Some(generation)
+        {
+            // keep-open pauses on the last frame; Play should replay the clip.
+            let result = (|| {
+                if !paused && core.flag(c"eof-reached").unwrap_or(false) {
+                    core.command(&[
+                        CString::new("seek").unwrap(),
+                        CString::new("0").unwrap(),
+                        CString::new("absolute+exact").unwrap(),
+                    ])?;
+                }
+                core.command(&[
+                    CString::new("set").unwrap(),
+                    CString::new("pause").unwrap(),
+                    CString::new(if paused { "yes" } else { "no" }).unwrap(),
+                ])
+            })();
+            if let Err(message) = result {
+                log::warn!("video pause failed: {message}");
+            }
         }
         if let Some((generation, fraction)) = seek
             && wanted.as_ref().map(|t| t.generation) == Some(generation)
@@ -484,6 +517,7 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
                         position: core.double(c"time-pos").unwrap_or(0.),
                         duration: core.double(c"duration").unwrap_or(0.),
                         seekable: core.flag(c"seekable").unwrap_or(false),
+                        paused: core.flag(c"pause").unwrap_or(false),
                     },
                 );
             }
@@ -517,6 +551,7 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
             && state.target.is_none()
             && state.muted.is_none()
             && state.seek.is_none()
+            && state.paused.is_none()
         {
             let _ = queue
                 .wake

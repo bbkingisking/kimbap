@@ -42,7 +42,7 @@ impl Viewer {
         video_enabled: bool,
     ) -> Result<Rc<Self>, glib::Error> {
         let css = gtk::CssProvider::new();
-        css.load_from_string(".kimbap {background:#181616;color:#c5c9c5;font-family:Pretendard,sans-serif;} .kimbap headerbar {background:#0d0c0c;color:#c5c9c5;} .kimbap .preview-error {color:#c4746e;padding:32px;} .kimbap button {color:#c5c9c5;} .kimbap .video-progress {padding:8px 6px;} .kimbap .video-progress slider {min-width:10px;min-height:10px;background:#8ba4b0;border:0;} .kimbap .video-progress trough {min-height:4px;border:0;border-radius:0;background:#0d0c0c;} .kimbap .video-progress highlight {min-height:4px;border:0;border-radius:0;background:#8ba4b0;}");
+        css.load_from_string(".kimbap {background:#181616;color:#c5c9c5;font-family:Pretendard,sans-serif;} .kimbap headerbar {background:#0d0c0c;color:#c5c9c5;} .kimbap .preview-error {color:#c4746e;padding:32px;} .kimbap button {color:#c5c9c5;} .kimbap .video-progress highlight {background:#8ba4b0;}");
         if let Some(display) = gdk::Display::default() {
             gtk::style_context_add_provider_for_display(
                 &display,

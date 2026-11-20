@@ -29,10 +29,14 @@ pub struct VideoBackend {
     container: gtk::Box,
     area: gtk::GLArea,
     progress: gtk::Scale,
+    elapsed: gtk::Label,
+    total: gtk::Label,
     scrubbing: Cell<bool>,
     scrolling: Cell<bool>,
     duration: Cell<f64>,
     button: gtk::Button,
+    play: gtk::Button,
+    paused: Cell<bool>,
     preferences: Preferences,
     muted: Cell<bool>,
     control: RefCell<Option<Control>>,
@@ -69,11 +73,46 @@ impl VideoBackend {
         progress.set_sensitive(false);
         progress.set_hexpand(true);
         progress.add_css_class("video-progress");
+        progress.update_property(&[gtk::accessible::Property::Label("Playback position")]);
+        let elapsed = gtk::Label::new(Some("0:00"));
+        let total = gtk::Label::new(Some("--:--"));
+        for label in [&elapsed, &total] {
+            let attributes = gtk::pango::AttrList::new();
+            attributes.insert(gtk::pango::AttrFontFeatures::new("tnum=1"));
+            label.set_attributes(Some(&attributes));
+            label.add_css_class("dim-label");
+            label.set_width_chars(5);
+        }
+        elapsed.set_xalign(0.);
+        total.set_xalign(1.);
+        let timeline = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        timeline.set_margin_start(12);
+        timeline.set_margin_end(12);
+        timeline.set_margin_top(6);
+        timeline.set_margin_bottom(6);
+        let play = gtk::Button::from_icon_name("media-playback-pause-symbolic");
+        play.add_css_class("flat");
+        play.set_sensitive(false);
+        play.set_tooltip_text(Some("Pause"));
+        play.update_property(&[gtk::accessible::Property::Label("Pause")]);
+        let muted = preferences.muted().unwrap_or(true);
+        let button = gtk::Button::from_icon_name(if muted {
+            "audio-volume-muted-symbolic"
+        } else {
+            "audio-volume-high-symbolic"
+        });
+        button.add_css_class("flat");
+        let action = if muted { "Unmute" } else { "Mute" };
+        button.set_tooltip_text(Some(action));
+        button.update_property(&[gtk::accessible::Property::Label(action)]);
+        timeline.append(&play);
+        timeline.append(&elapsed);
+        timeline.append(&progress);
+        timeline.append(&total);
+        timeline.append(&button);
         let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
         container.append(&area);
-        container.append(&progress);
-        let muted = preferences.muted().unwrap_or(true);
-        let button = gtk::Button::with_label(if muted { "Unmute" } else { "Mute" });
+        container.append(&timeline);
         let (control, signals) = Control::new(hwdec, ao);
         control.mute(muted);
         let (wake, updates) = async_channel::bounded(1);
@@ -81,10 +120,14 @@ impl VideoBackend {
             container,
             area,
             progress,
+            elapsed,
+            total,
             scrubbing: Cell::new(false),
             scrolling: Cell::new(false),
             duration: Cell::new(0.),
             button,
+            play,
+            paused: Cell::new(false),
             preferences,
             muted: Cell::new(muted),
             control: RefCell::new(Some(control)),
@@ -101,6 +144,13 @@ impl VideoBackend {
             started: Cell::new(Instant::now()),
             tasks: RefCell::new(Vec::new()),
             wake,
+        });
+        let weak = Rc::downgrade(&backend);
+        backend.progress.connect_value_changed(move |scale| {
+            if let Some(v) = weak.upgrade() {
+                v.elapsed
+                    .set_label(&format_time(scale.value() * v.duration.get()));
+            }
         });
         let weak = Rc::downgrade(&backend);
         backend.progress.connect_change_value(move |_, _, value| {
@@ -221,6 +271,16 @@ impl VideoBackend {
             glib::Propagation::Stop
         });
         let weak = Rc::downgrade(&backend);
+        backend.play.connect_clicked(move |_| {
+            if let Some(v) = weak.upgrade() {
+                let paused = !v.paused.get();
+                v.update_paused(paused);
+                if let Some(control) = v.control.borrow().as_ref() {
+                    control.pause(v.generation.get(), paused);
+                }
+            }
+        });
+        let weak = Rc::downgrade(&backend);
         backend.button.connect_clicked(move |_| {
             if let Some(v) = weak.upgrade() {
                 v.toggle_mute();
@@ -337,13 +397,21 @@ impl VideoBackend {
                 position,
                 duration,
                 seekable,
+                paused,
             } if generation == self.generation.get() => {
                 let fraction = if position.is_finite() && duration.is_finite() && duration > 0. {
                     (position / duration).clamp(0., 1.)
                 } else {
                     0.
                 };
+                self.play.set_sensitive(true);
+                self.update_paused(paused);
                 self.duration.set(duration);
+                self.total.set_label(&format_time(if duration > 0. {
+                    duration
+                } else {
+                    f64::NAN
+                }));
                 self.progress
                     .set_sensitive(seekable && duration.is_finite() && duration > 0.);
                 if !self.scrubbing.get() && !self.scrolling.get() {
@@ -390,6 +458,18 @@ impl VideoBackend {
             });
         }
     }
+    fn update_paused(&self, paused: bool) {
+        self.paused.set(paused);
+        self.play.set_icon_name(if paused {
+            "media-playback-start-symbolic"
+        } else {
+            "media-playback-pause-symbolic"
+        });
+        let action = if paused { "Play" } else { "Pause" };
+        self.play.set_tooltip_text(Some(action));
+        self.play
+            .update_property(&[gtk::accessible::Property::Label(action)]);
+    }
     pub fn toggle_mute(&self) {
         let muted = !self.muted.get();
         self.muted.set(muted);
@@ -397,14 +477,20 @@ impl VideoBackend {
             control.mute(muted);
         }
         let label = if muted { "Unmute" } else { "Mute" };
+        self.button.set_icon_name(if muted {
+            "audio-volume-muted-symbolic"
+        } else {
+            "audio-volume-high-symbolic"
+        });
+        self.button
+            .update_property(&[gtk::accessible::Property::Label(label)]);
         match self.preferences.set_muted(muted) {
             Ok(()) => {
-                self.button.set_label(label);
-                self.button.set_tooltip_text(None);
+                self.button.set_tooltip_text(Some(label));
             }
             Err(error) => {
-                self.button.set_label(&format!("{label} (not saved)"));
-                self.button.set_tooltip_text(Some(&error));
+                self.button
+                    .set_tooltip_text(Some(&format!("{label} (not saved): {error}")));
                 eprintln!("kimbap: {error}");
             }
         }
@@ -415,13 +501,17 @@ impl Backend for VideoBackend {
         self.container.clone().upcast()
     }
     fn controls(&self) -> gtk::Widget {
-        self.button.clone().upcast()
+        gtk::Box::new(gtk::Orientation::Horizontal, 0).upcast()
     }
     fn load(&self, generation: u64, path: PathBuf) {
         self.generation.set(generation);
         self.scrubbing.set(false);
         self.scrolling.set(false);
         self.duration.set(0.);
+        self.update_paused(false);
+        self.play.set_sensitive(false);
+        self.elapsed.set_label("0:00");
+        self.total.set_label("--:--");
         self.progress.set_value(0.);
         self.progress.set_sensitive(false);
         self.info.set(None);
@@ -449,6 +539,10 @@ impl Backend for VideoBackend {
         self.scrubbing.set(false);
         self.scrolling.set(false);
         self.duration.set(0.);
+        self.update_paused(false);
+        self.play.set_sensitive(false);
+        self.elapsed.set_label("0:00");
+        self.total.set_label("--:--");
         self.progress.set_value(0.);
         self.progress.set_sensitive(false);
         self.info.set(None);
@@ -474,5 +568,22 @@ impl Drop for VideoBackend {
         self.release_renderer();
         self.core.get_mut().take();
         self.control.get_mut().take();
+    }
+}
+
+fn format_time(seconds: f64) -> String {
+    if !seconds.is_finite() || seconds < 0. {
+        return "--:--".into();
+    }
+    let seconds = seconds.floor() as u64;
+    if seconds >= 3600 {
+        format!(
+            "{}:{:02}:{:02}",
+            seconds / 3600,
+            seconds / 60 % 60,
+            seconds % 60
+        )
+    } else {
+        format!("{}:{:02}", seconds / 60, seconds % 60)
     }
 }

@@ -24,8 +24,10 @@ codegen-units = 1
 strip = "debuginfo"
 
 [workspace]
-members = ["crates/worker", "crates/jpeg-worker", "crates/pdf-worker"]
-default-members = [".", "crates/jpeg-worker", "crates/pdf-worker"]
+members = ["crates/worker", "crates/jpeg-worker", "crates/pdf-worker", "xtask"]
+# The release task builds/stages the PDF worker separately for musl. A normal
+# host build must not overwrite that static executable with a glibc build.
+default-members = [".", "crates/jpeg-worker"]
 resolver = "3"
 
 [features]

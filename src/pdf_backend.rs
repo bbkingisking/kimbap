@@ -32,8 +32,8 @@ pub struct PdfBackend {
     task: RefCell<Option<glib::JoinHandle<()>>>,
 }
 impl PdfBackend {
-    pub fn new(worker: PathBuf, library: PathBuf, notify: Notify) -> Rc<Self> {
-        let (decoder, receive) = Decoder::new(worker, library);
+    pub fn new(worker: PathBuf, notify: Notify) -> Rc<Self> {
+        let (decoder, receive) = Decoder::new(worker);
         let backend = Rc::new(Self {
             canvas: ImageCanvas::for_document(),
             controls: gtk::Box::new(gtk::Orientation::Horizontal, 6),

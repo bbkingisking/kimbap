@@ -15,8 +15,7 @@ pub(crate) struct Worker {
     pub child: Child,
 }
 impl Worker {
-    pub fn spawn(path: &Path, library: Option<&Path>, magic: &[u8; 4]) -> io::Result<Self> {
-        let library = library.map(Path::canonicalize).transpose()?;
+    pub fn spawn(path: &Path, pdf: bool, magic: &[u8; 4]) -> io::Result<Self> {
         let path = path.canonicalize()?;
         let (socket, child_socket) = UnixStream::pair()?;
         socket.set_read_timeout(Some(Duration::from_secs(4)))?;
@@ -34,6 +33,14 @@ impl Worker {
                 "LC_ALL",
                 "C",
                 "--ro-bind",
+            ])
+            .arg(path)
+            .args([
+                "/decoder", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
+            ]);
+        if !pdf {
+            command.args([
+                "--ro-bind",
                 "/usr",
                 "/usr",
                 "--symlink",
@@ -45,31 +52,9 @@ impl Worker {
                 "--ro-bind-try",
                 "/etc/ld.so.cache",
                 "/etc/ld.so.cache",
-                "--ro-bind",
-            ])
-            .arg(path)
-            .args([
-                "/decoder", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
             ]);
-        if let Some(library) = library.as_ref() {
-            // Mount the renderer explicitly, even when it lives outside /usr.
-            command
-                .args(["--ro-bind"])
-                .arg(library)
-                .arg("/pdfium.so")
-                .args([
-                    "--ro-bind-try",
-                    "/etc/fonts",
-                    "/etc/fonts",
-                    "--ro-bind-try",
-                    "/var/cache/fontconfig",
-                    "/var/cache/fontconfig",
-                ]);
         }
         command.args(["--", "/decoder"]);
-        if library.is_some() {
-            command.arg("/pdfium.so");
-        }
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())

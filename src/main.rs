@@ -38,7 +38,6 @@ fn run() -> Result<()> {
     let mut experimental_video = false;
     let mut worker = std::env::current_exe()?.with_file_name("kimbap-jpeg-worker");
     let mut pdf_worker = std::env::current_exe()?.with_file_name("kimbap-pdf-worker");
-    let mut pdfium_library = std::env::current_exe()?.with_file_name("libpdfium.so");
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -51,22 +50,17 @@ fn run() -> Result<()> {
             "--pdf-worker" => {
                 pdf_worker = PathBuf::from(args.next().ok_or("--pdf-worker requires a path")?)
             }
-            "--pdfium-library" => {
-                pdfium_library =
-                    PathBuf::from(args.next().ok_or("--pdfium-library requires a path")?)
-            }
             "--version" => {
                 println!("kimbap {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: kimbap [--bus-name NAME] [--jpeg-worker PATH] [--pdf-worker PATH] [--pdfium-library PATH] [--transport-only] [--experimental-video]\n\n\
+                    "Usage: kimbap [--bus-name NAME] [--jpeg-worker PATH] [--pdf-worker PATH] [--transport-only] [--experimental-video]\n\n\
                      Format backends in a shared GTK4 preview window.\n\n\
                      --bus-name NAME  Alternative name for isolated development\n\
                      --jpeg-worker    Path to the bundled decoder executable\n\
                      --pdf-worker     Path to the bundled PDF renderer executable\n\
-                     --pdfium-library Path to libpdfium.so (default: beside kimbap)\n\
                      --transport-only Export the no-op interface without a display\n\
                      --experimental-video Enable the experimental libmpv backend\n\n\
                      Set RUST_LOG=kimbap=debug for command and rendering diagnostics."
@@ -134,7 +128,6 @@ fn run() -> Result<()> {
             endpoint.clone(),
             worker,
             pdf_worker,
-            pdfium_library,
             experimental_video,
         )?)
     };

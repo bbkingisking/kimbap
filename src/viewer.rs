@@ -38,7 +38,6 @@ impl Viewer {
         endpoint: Rc<PreviewEndpoint>,
         worker: PathBuf,
         pdf_worker: PathBuf,
-        pdfium_library: PathBuf,
         video_enabled: bool,
     ) -> Result<Rc<Self>, glib::Error> {
         let css = gtk::CssProvider::new();
@@ -96,7 +95,7 @@ impl Viewer {
             });
             let image: Rc<dyn Backend> = ImageBackend::new(worker, notify.clone());
             stack.add_named(&image.widget(), Some("image"));
-            let pdf: Rc<dyn Backend> = PdfBackend::new(pdf_worker, pdfium_library, notify.clone());
+            let pdf: Rc<dyn Backend> = PdfBackend::new(pdf_worker, notify.clone());
             stack.add_named(&pdf.widget(), Some("pdf"));
             Self {
                 endpoint,

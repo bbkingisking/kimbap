@@ -1,6 +1,7 @@
 use kimbap::pdf::Decoder;
 use std::{
     fs,
+    os::unix::fs::MetadataExt,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -24,12 +25,17 @@ impl Drop for Fixtures {
     }
 }
 fn pdf() -> Vec<u8> {
+    pdf_with_geometry("")
+}
+fn pdf_with_geometry(geometry: &str) -> Vec<u8> {
     // Two differently sized pages exercise navigation, fitting and RGBA order.
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>".into(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 4 0 R >>".into(),
-        stream("1 0 0 rg 0 0 200 300 re f"),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] {geometry} /Contents 4 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>"
+        ),
+        stream("1 0 0 rg 0 0 200 300 re f 0 0 0 rg BT /F1 24 Tf 20 150 Td (PDF) Tj ET"),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 6 0 R >>".into(),
         stream("0 1 0 rg 0 0 300 200 re f"),
     ];
@@ -61,20 +67,30 @@ fn stream(content: &str) -> String {
 }
 
 #[test]
-#[ignore = "requires PDFIUM_LIBRARY pointing to a compatible native PDFium build and working bubblewrap"]
+#[ignore = "requires the static PDF worker (cargo xtask pdf-worker) and working bubblewrap"]
 fn persistent_pdf_worker_renders_navigates_recovers_and_cancels() {
     let fixtures = Fixtures::new();
     let original = fixtures.write("pages.pdf", &pdf());
-    let library = PathBuf::from(std::env::var_os("PDFIUM_LIBRARY").expect("set PDFIUM_LIBRARY"));
-    let (decoder, replies) = Decoder::new(
-        PathBuf::from(env!("CARGO_BIN_EXE_kimbap-pdf-worker")),
-        library,
-    );
+    let worker =
+        PathBuf::from(std::env::var_os("KIMBAP_PDF_WORKER").expect("set KIMBAP_PDF_WORKER"))
+            .canonicalize()
+            .unwrap();
+    let worker_file = fs::metadata(&worker).unwrap();
+    let (decoder, replies) = Decoder::new(worker.clone());
     decoder.render(1, original.clone(), 0, 120, 180);
     let first = replies.recv_blocking().unwrap().result.unwrap();
     assert_eq!(first.pages, 2);
     assert_eq!((first.frame.width, first.frame.height), (120, 180));
     assert_eq!(&first.frame.pixels[..4], &[255, 0, 0, 255]);
+    assert!(
+        first
+            .frame
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .contains(&[0, 0, 0, 255]),
+        "PDF text did not render"
+    );
     assert!(!first.cache_hit);
     let pid = first.worker_pid.unwrap();
     let mut pending = vec![pid];
@@ -88,8 +104,30 @@ fn persistent_pdf_worker_renders_navigates_recovers_and_cancels() {
                 .map(|p| p.parse::<u32>().unwrap()),
         );
         let status = fs::read_to_string(format!("/proc/{process}/status")).unwrap();
-        if status.contains("Seccomp:\t2") {
+        // The executable is called /decoder inside the mount namespace, so
+        // compare file identity rather than its namespace-dependent path.
+        let executable = fs::metadata(format!("/proc/{process}/exe")).unwrap();
+        if (executable.dev(), executable.ino()) == (worker_file.dev(), worker_file.ino()) {
+            assert!(status.contains("Seccomp:\t2"));
             assert!(status.contains("NoNewPrivs:\t1"));
+            let maps = fs::read_to_string(format!("/proc/{process}/maps")).unwrap();
+            assert!(!maps.contains(".so"), "PDF worker loaded a shared library");
+            let mounts = fs::read_to_string(format!("/proc/{process}/mountinfo")).unwrap();
+            for mount in mounts.lines() {
+                let path = mount.split_whitespace().nth(4).unwrap();
+                assert!(!matches!(
+                    path,
+                    "/usr"
+                        | "/usr/lib"
+                        | "/usr/lib64"
+                        | "/lib"
+                        | "/lib64"
+                        | "/usr/share/fonts"
+                        | "/usr/local/share/fonts"
+                        | "/etc/fonts"
+                        | "/var/cache/fontconfig"
+                ));
+            }
             confined = true;
         }
     }
@@ -129,6 +167,15 @@ fn persistent_pdf_worker_renders_navigates_recovers_and_cancels() {
             .unwrap_err()
             .contains("password")
     );
+    // Crop-box offsets and page rotation must both precede fitting to pixels.
+    let cropped = fixtures.write(
+        "cropped.pdf",
+        &pdf_with_geometry("/CropBox [20 30 120 230] /Rotate 90"),
+    );
+    decoder.render(4, cropped, 0, 120, 180);
+    let rotated = replies.recv_blocking().unwrap().result.unwrap();
+    assert_eq!((rotated.frame.width, rotated.frame.height), (120, 60));
+    assert_eq!(&rotated.frame.pixels[..4], &[255, 0, 0, 255]);
     // After two failed opens, cache misses must reopen the intended document.
     decoder.render(4, original.clone(), 1, 130, 180);
     assert_eq!(

@@ -1,0 +1,7 @@
+date,engine,version,target,corpus,documents,pages,max_width,max_height,passes,mean_parse_ms,mean_first_page_ms,mean_page_ms,median_page_ms,total_render_ms,status
+2026-11-20,pdfium,8085 (pdfium-render 0.9.5),aarch64-unknown-linux-musl,compiled-tex,21,34,1200,1600,1,0.166,11.184,10.713,7.083,364.254,all-pages-rendered
+2026-11-20,hayro,0.9.0,aarch64-unknown-linux-musl,compiled-tex,21,34,1200,1600,1,0.168,10.451,8.623,6.449,293.192,all-pages-rendered
+2026-11-20,pdfium,8085 (pdfium-render 0.9.5),aarch64-unknown-linux-musl,existing-cv,2,3,1200,1600,1,0.162,7.841,7.135,7.562,21.406,all-pages-rendered
+2026-11-20,hayro,0.9.0,aarch64-unknown-linux-musl,existing-cv,2,3,1200,1600,1,0.133,6.987,5.949,6.938,17.847,all-pages-rendered
+2026-11-20,pdfium,8085 (pdfium-render 0.9.5),aarch64-unknown-linux-musl,book,1,308,1200,1600,1,1.536,429.689,44.836,45.054,13809.639,all-pages-rendered
+2026-11-20,hayro,0.9.0,aarch64-unknown-linux-musl,book,1,308,1200,1600,1,2.63,143.336,24.975,25.788,7692.263,all-pages-rendered

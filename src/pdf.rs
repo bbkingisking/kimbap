@@ -54,7 +54,7 @@ pub struct Decoder {
     replies: async_channel::Sender<Reply>,
 }
 impl Decoder {
-    pub fn new(worker: PathBuf, library: PathBuf) -> (Self, async_channel::Receiver<Reply>) {
+    pub fn new(worker: PathBuf) -> (Self, async_channel::Receiver<Reply>) {
         let shared = Arc::new(Shared {
             queue: Mutex::new(Queue::default()),
             ready: Condvar::new(),
@@ -64,7 +64,7 @@ impl Decoder {
         let replies = send.clone();
         let thread = thread::Builder::new()
             .name("pdf-scheduler".into())
-            .spawn(move || run(state, send, worker, library))
+            .spawn(move || run(state, send, worker))
             .expect("create PDF scheduler");
         (
             Self {
@@ -142,12 +142,7 @@ struct CacheKey {
     width: u32,
     height: u32,
 }
-fn run(
-    shared: Arc<Shared>,
-    send: async_channel::Sender<Reply>,
-    worker_path: PathBuf,
-    library: PathBuf,
-) {
+fn run(shared: Arc<Shared>, send: async_channel::Sender<Reply>, worker_path: PathBuf) {
     let mut worker: Option<Worker> = None;
     let mut opened: Option<(Key, u32)> = None;
     let mut cache: VecDeque<(CacheKey, u32, Arc<Frame>)> = VecDeque::new();
@@ -223,10 +218,12 @@ fn run(
                     return Err("Superseded request".into());
                 }
                 if worker.is_none() {
-                    let process = Worker::spawn(&worker_path, Some(&library), wire::MAGIC)
-                        .map_err(|error| format!(
-                            "Cannot start sandboxed PDF worker: {error}. Check --pdf-worker and --pdfium-library"
-                        ))?;
+                    let process =
+                        Worker::spawn(&worker_path, true, wire::MAGIC).map_err(|error| {
+                            format!(
+                                "Cannot start sandboxed PDF worker: {error}. Check --pdf-worker"
+                            )
+                        })?;
                     worker = Some(process);
                 }
                 opened = None;

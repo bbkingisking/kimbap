@@ -181,7 +181,7 @@ fn run(shared: Arc<Shared>, send: async_channel::Sender<Reply>, worker_path: Pat
             }
             if worker.is_none() {
                 worker = Some(
-                    Worker::spawn(&worker_path, None, ipc::JPEG_MAGIC)
+                    Worker::spawn(&worker_path, false, ipc::JPEG_MAGIC)
                         .map_err(|e| format!("Cannot start sandboxed image worker: {e}"))?,
                 );
             }

@@ -1,14 +1,6 @@
 use std::io;
 
 pub fn restrict() -> io::Result<()> {
-    restrict_inner(false)
-}
-
-pub fn restrict_with_fonts() -> io::Result<()> {
-    restrict_inner(true)
-}
-
-fn restrict_inner(fonts: bool) -> io::Result<()> {
     // Kernel limits cover native allocations too; a decoder bug cannot consume
     // unbounded address space or descriptors.
     for (resource, value) in [
@@ -88,25 +80,6 @@ fn restrict_inner(fonts: bool) -> io::Result<()> {
     for syscall in allowed {
         filter.push(jump(syscall as u32, 0, 1));
         filter.push(stmt(0x06, libc::SECCOMP_RET_ALLOW));
-    }
-    if fonts {
-        // PDFium may lazily consult system fonts. The mount namespace exposes
-        // only read-only system data and private /tmp; no user files or network.
-        #[cfg(target_arch = "x86_64")]
-        for syscall in [libc::SYS_access, libc::SYS_readlink, libc::SYS_open] {
-            filter.push(jump(syscall as u32, 0, 1));
-            filter.push(stmt(0x06, libc::SECCOMP_RET_ALLOW));
-        }
-        for syscall in [
-            libc::SYS_openat,
-            libc::SYS_getdents64,
-            libc::SYS_readlinkat,
-            libc::SYS_faccessat,
-            libc::SYS_faccessat2,
-        ] {
-            filter.push(jump(syscall as u32, 0, 1));
-            filter.push(stmt(0x06, libc::SECCOMP_RET_ALLOW));
-        }
     }
     filter.push(stmt(0x06, libc::SECCOMP_RET_ERRNO | libc::EPERM as u32));
     let program = libc::sock_fprog {

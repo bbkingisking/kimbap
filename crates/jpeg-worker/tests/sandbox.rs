@@ -113,6 +113,29 @@ fn persistent_sandbox_decodes_recovers_and_prefers_latest() {
             assert_eq!(pixel, &first.frame.pixels[index * 4..index * 4 + 4]);
         }
     }
+    // Both codecs use the same persistent sandbox and metadata-keyed cache.
+    let png_path = files.0.join("transparent.png");
+    let mut png_bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, 2, 1);
+        encoder.set_color(png::ColorType::Rgba);
+        let mut writer = encoder.write_header().unwrap();
+        writer
+            .write_image_data(&[255, 0, 0, 0, 0, 255, 0, 128])
+            .unwrap();
+    }
+    fs::write(&png_path, &png_bytes).unwrap();
+    decoder.load(10, png_path.clone());
+    let png = replies.recv_blocking().unwrap().result.unwrap();
+    assert_eq!(png.worker_pid, Some(pid));
+    assert_eq!((png.frame.width, png.frame.height), (2, 1));
+    assert_eq!(&png.frame.pixels[..], &[255, 0, 0, 0, 0, 255, 0, 128]);
+    decoder.load(10, png_path);
+    assert!(replies.recv_blocking().unwrap().result.unwrap().cache_hit);
+    let truncated = files.0.join("truncated.png");
+    fs::write(&truncated, &png_bytes[..png_bytes.len() / 2]).unwrap();
+    decoder.load(10, truncated);
+    assert!(replies.recv_blocking().unwrap().result.is_err());
     let invalid = files.0.join("truncated.jpeg");
     fs::write(&invalid, &plain[..plain.len() / 2]).unwrap();
     decoder.load(11, invalid);

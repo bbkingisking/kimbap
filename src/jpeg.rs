@@ -1,4 +1,4 @@
-//! JPEG scheduling and sandbox lifecycle. Blocking filesystem and socket work
+//! JPEG/PNG scheduling and sandbox lifecycle. Blocking filesystem and socket work
 //! stays on one thread; a single pending slot always contains the latest request.
 use crate::worker::Worker;
 use kimbap_worker::{self as ipc, Frame};
@@ -57,9 +57,9 @@ impl Decoder {
         let state = shared.clone();
         let replies = send.clone();
         let thread = thread::Builder::new()
-            .name("jpeg-scheduler".into())
+            .name("image-scheduler".into())
             .spawn(move || run(state, send, worker))
-            .expect("create JPEG scheduler");
+            .expect("create image scheduler");
         (
             Self {
                 shared,
@@ -148,10 +148,10 @@ fn run(shared: Arc<Shared>, send: async_channel::Sender<Reply>, worker_path: Pat
                 .metadata()
                 .map_err(|e| format!("Cannot inspect image: {e}"))?;
             if !metadata.is_file() {
-                return Err("The selected item is not a regular JPEG file".into());
+                return Err("The selected item is not a regular image file".into());
             }
             if metadata.len() > ipc::MAX_INPUT as u64 {
-                return Err("JPEG exceeds the 64-MiB input limit".into());
+                return Err("Image exceeds the 64-MiB input limit".into());
             }
             let key = Key::from(&metadata);
             if let Some(index) = cache.iter().position(|(k, _)| *k == key) {
@@ -171,10 +171,10 @@ fn run(shared: Arc<Shared>, send: async_channel::Sender<Reply>, worker_path: Pat
                 .read_to_end(&mut bytes)
                 .map_err(|e| format!("Cannot read image: {e}"))?;
             if bytes.len() > ipc::MAX_INPUT {
-                return Err("JPEG exceeds the 64-MiB input limit".into());
+                return Err("Image exceeds the 64-MiB input limit".into());
             }
-            if !bytes.starts_with(&[255, 216, 255]) {
-                return Err("This file is not a JPEG; other formats are not wired up yet".into());
+            if !bytes.starts_with(&[255, 216, 255]) && !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+                return Err("This file is not a supported JPEG or PNG image".into());
             }
             if shared.queue.lock().unwrap().generation != request.generation {
                 return Err("Superseded request".into());
@@ -182,7 +182,7 @@ fn run(shared: Arc<Shared>, send: async_channel::Sender<Reply>, worker_path: Pat
             if worker.is_none() {
                 worker = Some(
                     Worker::spawn(&worker_path, None, ipc::JPEG_MAGIC)
-                        .map_err(|e| format!("Cannot start sandboxed JPEG worker: {e}"))?,
+                        .map_err(|e| format!("Cannot start sandboxed image worker: {e}"))?,
                 );
             }
             let response = (|| {
@@ -194,7 +194,7 @@ fn run(shared: Arc<Shared>, send: async_channel::Sender<Reply>, worker_path: Pat
                 Ok(result) => result?,
                 Err(error) => {
                     worker = None;
-                    return Err(format!("JPEG worker failed: {error}"));
+                    return Err(format!("Image worker failed: {error}"));
                 }
             };
             let size = frame.pixels.len();

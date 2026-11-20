@@ -1,4 +1,4 @@
-//! JPEG presentation adapter. Worker scheduling and the canvas remain independent
+//! JPEG/PNG presentation adapter. Worker scheduling and the canvas remain independent
 //! of the shared preview window and of every other format backend.
 use crate::canvas::{ImageCanvas, Pixels};
 use gtk::{gdk, glib, prelude::*};

@@ -3,14 +3,16 @@ use gtk::gdk;
 use std::{path::PathBuf, rc::Rc};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
-    Jpeg,
+    Image,
     Pdf,
     Video,
 }
 impl Kind {
     pub fn for_content_type(content_type: &str) -> Option<Self> {
-        if gio::content_type_is_a(content_type, "image/jpeg") {
-            Some(Self::Jpeg)
+        if gio::content_type_is_a(content_type, "image/jpeg")
+            || gio::content_type_is_a(content_type, "image/png")
+        {
+            Some(Self::Image)
         } else if gio::content_type_is_a(content_type, "application/pdf") {
             Some(Self::Pdf)
         } else if content_type.starts_with("video/") {
@@ -46,7 +48,8 @@ mod tests {
     use super::*;
     #[test]
     fn routes_without_decoding_fallback() {
-        assert_eq!(Kind::for_content_type("image/jpeg"), Some(Kind::Jpeg));
+        assert_eq!(Kind::for_content_type("image/jpeg"), Some(Kind::Image));
+        assert_eq!(Kind::for_content_type("image/png"), Some(Kind::Image));
         assert_eq!(
             Kind::for_content_type("video/x-matroska"),
             Some(Kind::Video)

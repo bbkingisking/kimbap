@@ -206,9 +206,9 @@ fn run() -> Result<()> {
             "transport only"
         } else {
             if experimental_video {
-                "JPEG + PDF + experimental video"
+                "JPEG/PNG + PDF + experimental video"
             } else {
-                "JPEG + PDF viewer"
+                "JPEG/PNG + PDF viewer"
             }
         }
     );

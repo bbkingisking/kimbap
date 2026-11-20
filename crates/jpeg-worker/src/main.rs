@@ -1,4 +1,5 @@
 mod metadata;
+mod png;
 use kimbap_worker::sandbox;
 
 use kimbap_worker::{self as ipc, invalid};
@@ -12,7 +13,7 @@ use turbojpeg::{Colorspace, Decompressor, Image, PixelFormat};
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("kimbap JPEG worker: {error}");
+        eprintln!("kimbap image worker: {error}");
         std::process::exit(1);
     }
 }
@@ -41,6 +42,9 @@ fn run() -> io::Result<()> {
     Ok(())
 }
 fn decode(decoder: &mut Decompressor, bytes: &[u8]) -> io::Result<(File, u32, u32)> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return png::decode(bytes);
+    }
     let metadata = metadata::read(bytes)?;
     let header = decoder
         .read_header(bytes)

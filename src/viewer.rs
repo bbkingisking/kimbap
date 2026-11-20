@@ -95,7 +95,7 @@ impl Viewer {
                 }
             });
             let image: Rc<dyn Backend> = ImageBackend::new(worker, notify.clone());
-            stack.add_named(&image.widget(), Some("jpeg"));
+            stack.add_named(&image.widget(), Some("image"));
             let pdf: Rc<dyn Backend> = PdfBackend::new(pdf_worker, pdfium_library, notify.clone());
             stack.add_named(&pdf.widget(), Some("pdf"));
             Self {
@@ -106,7 +106,7 @@ impl Viewer {
                 title,
                 spinner,
                 controls,
-                backends: RefCell::new(HashMap::from([(Kind::Jpeg, image), (Kind::Pdf, pdf)])),
+                backends: RefCell::new(HashMap::from([(Kind::Image, image), (Kind::Pdf, pdf)])),
                 #[cfg(feature = "video")]
                 notify,
                 video_enabled,
@@ -282,7 +282,7 @@ impl Viewer {
                             }
                             viewer.active.set(Some(kind));
                             viewer.stack.set_visible_child_name(match kind {
-                                Kind::Jpeg => "jpeg",
+                                Kind::Image => "image",
                                 Kind::Pdf => "pdf",
                                 Kind::Video => "video",
                             });

@@ -36,7 +36,6 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     let mut bus_name = BUS_NAME.to_owned();
     let mut transport_only = false;
-    let mut experimental_video = false;
     let mut worker = std::env::current_exe()?.with_file_name("kimbap-jpeg-worker");
     let mut pdf_worker = std::env::current_exe()?.with_file_name("kimbap-pdf-worker");
     let mut args = std::env::args().skip(1);
@@ -44,7 +43,6 @@ fn run() -> Result<()> {
         match arg.as_str() {
             "--bus-name" => bus_name = args.next().ok_or("--bus-name requires a name")?,
             "--transport-only" => transport_only = true,
-            "--experimental-video" => experimental_video = true,
             "--jpeg-worker" => {
                 worker = PathBuf::from(args.next().ok_or("--jpeg-worker requires a path")?)
             }
@@ -57,22 +55,18 @@ fn run() -> Result<()> {
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: kimbap [--bus-name NAME] [--jpeg-worker PATH] [--pdf-worker PATH] [--transport-only] [--experimental-video]\n\n\
+                    "Usage: kimbap [--bus-name NAME] [--jpeg-worker PATH] [--pdf-worker PATH] [--transport-only]\n\n\
                      Format backends in a shared GTK4 preview window.\n\n\
                      --bus-name NAME  Alternative name for isolated development\n\
                      --jpeg-worker    Path to the bundled decoder executable\n\
                      --pdf-worker     Path to the bundled PDF renderer executable\n\
-                     --transport-only Export the no-op interface without a display\n\
-                     --experimental-video Enable the experimental libmpv backend\n\n\
+                     --transport-only Export the no-op interface without a display\n\n\
                      Set RUST_LOG=kimbap=debug for command and rendering diagnostics."
                 );
                 return Ok(());
             }
             _ => return Err(format!("unknown argument {arg:?}; see --help").into()),
         }
-    }
-    if experimental_video && !cfg!(feature = "video") {
-        return Err("Video support requires a build with --features video".into());
     }
     if !gio::dbus_is_name(&bus_name) || bus_name.starts_with(':') {
         return Err(format!("not a well-known D-Bus name: {bus_name:?}").into());
@@ -100,9 +94,7 @@ fn run() -> Result<()> {
     if !transport_only {
         gtk::init()?;
         #[cfg(feature = "video")]
-        if experimental_video {
-            kimbap::video::initialize()?;
-        }
+        kimbap::video::initialize()?;
     }
     let ui: Rc<RefCell<Weak<viewer::Viewer>>> = Rc::new(RefCell::new(Weak::new()));
     let dispatch = ui.clone();
@@ -125,12 +117,7 @@ fn run() -> Result<()> {
     let viewer = if transport_only {
         None
     } else {
-        Some(viewer::Viewer::new(
-            endpoint.clone(),
-            worker,
-            pdf_worker,
-            experimental_video,
-        )?)
+        Some(viewer::Viewer::new(endpoint.clone(), worker, pdf_worker)?)
     };
     if let Some(viewer) = &viewer {
         *ui.borrow_mut() = Rc::downgrade(viewer);
@@ -198,12 +185,10 @@ fn run() -> Result<()> {
         "kimbap: ready on {bus_name} ({})",
         if transport_only {
             "transport only"
+        } else if cfg!(feature = "video") {
+            "JPEG/PNG + PDF + video viewer"
         } else {
-            if experimental_video {
-                "JPEG/PNG + PDF + experimental video"
-            } else {
-                "JPEG/PNG + PDF viewer"
-            }
+            "JPEG/PNG + PDF viewer"
         }
     );
     main_loop.run();

@@ -28,7 +28,8 @@ gdbus call --session --dest org.gnome.NautilusPreviewer \
 KIMBAP_PDF_WORKER="$kimbap_install/bin/kimbap-pdf-worker" cargo test --test pdf -- --ignored
 ```
 
-`~/.local/bin/kimbap` already points to this installation. The service runs with
-`--experimental-video`; no daemon-reload is needed when replacing only binaries.
+`~/.local/bin/kimbap` already points to this installation. Video is enabled
+automatically in builds with the `video` feature; no daemon-reload is needed
+when replacing only binaries.
 The PDF worker uses Hayro and is static musl. To roll back, atomically restore
 the saved binaries, then restart.

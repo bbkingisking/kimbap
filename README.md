@@ -3,7 +3,7 @@
 A personal replacement for [sushi](https://github.com/GNOME/sushi), the file previewer for nautilus. Mainly using different backend libs that happen to be faster on my specific machine. Not intended to be used by anyone else, this repo is just a public push mirror backup.
 
 Build the application and its image/PDF workers with `cargo xtask release`
-(add `--features video` for libmpv). The desktop application uses GTK4 and
+(add `--features video` to include and enable libmpv video previews). The desktop application uses GTK4 and
 `/usr/bin/bwrap` at runtime.
 
 PDF previews use [Hayro](https://github.com/LaurenzV/hayro) 0.9.0, a pure Rust

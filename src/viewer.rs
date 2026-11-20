@@ -24,7 +24,6 @@ pub struct Viewer {
     backends: RefCell<HashMap<Kind, Rc<dyn Backend>>>,
     #[cfg(feature = "video")]
     notify: Notify,
-    video_enabled: bool,
     active: Cell<Option<Kind>>,
     generation: Cell<u64>,
     current: RefCell<Option<PreviewRequest>>,
@@ -38,7 +37,6 @@ impl Viewer {
         endpoint: Rc<PreviewEndpoint>,
         worker: PathBuf,
         pdf_worker: PathBuf,
-        video_enabled: bool,
     ) -> Result<Rc<Self>, glib::Error> {
         let css = gtk::CssProvider::new();
         css.load_from_string(".kimbap {background:#181616;color:#c5c9c5;font-family:Pretendard,sans-serif;} .kimbap headerbar {background:#0d0c0c;color:#c5c9c5;} .kimbap .preview-error {color:#c4746e;padding:32px;} .kimbap button {color:#c5c9c5;} .kimbap .text-preview {background:#181616;color:#c5c9c5;font-family:\"IBM Plex Mono\",monospace;} .kimbap .video-progress highlight {background:#8ba4b0;}");
@@ -114,7 +112,6 @@ impl Viewer {
                 ])),
                 #[cfg(feature = "video")]
                 notify,
-                video_enabled,
                 active: Cell::new(None),
                 generation: Cell::new(0),
                 current: RefCell::new(None),
@@ -168,24 +165,21 @@ impl Viewer {
         if let Some(backend) = self.backends.borrow().get(&kind) {
             return Ok(backend.clone());
         }
-        if kind == Kind::Video && self.video_enabled {
-            #[cfg(feature = "video")]
-            {
-                let preferences = kimbap::preferences::Preferences::load(
-                    kimbap::preferences::Preferences::path(),
-                )?;
-                let backend: Rc<dyn Backend> = kimbap::video::VideoBackend::new(
-                    preferences,
-                    self.notify.clone(),
-                    "auto".into(),
-                    None,
-                );
-                self.stack.add_named(&backend.widget(), Some("video"));
-                self.backends.borrow_mut().insert(kind, backend.clone());
-                return Ok(backend);
-            }
+        #[cfg(feature = "video")]
+        if kind == Kind::Video {
+            let preferences =
+                kimbap::preferences::Preferences::load(kimbap::preferences::Preferences::path())?;
+            let backend: Rc<dyn Backend> = kimbap::video::VideoBackend::new(
+                preferences,
+                self.notify.clone(),
+                "auto".into(),
+                None,
+            );
+            self.stack.add_named(&backend.widget(), Some("video"));
+            self.backends.borrow_mut().insert(kind, backend.clone());
+            return Ok(backend);
         }
-        Err("Video previews are not enabled in this session".into())
+        Err("Video support requires a build with --features video".into())
     }
     fn show(self: &Rc<Self>, request: PreviewRequest) {
         let requested = Instant::now();

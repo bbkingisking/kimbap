@@ -190,6 +190,9 @@ pub enum Signal {
         seekable: bool,
         paused: bool,
     },
+    AudioOnly {
+        generation: u64,
+    },
     Info {
         generation: u64,
         width: i32,
@@ -440,6 +443,16 @@ fn run(queue: Arc<Queue>, send: async_channel::Sender<Signal>, mode: String, ao:
                         data.playlist_entry_id,
                         entries.get(&data.playlist_entry_id)
                     );
+                }
+                raw::mpv_event_id_MPV_EVENT_FILE_LOADED => {
+                    // Query selected tracks after loading, rather than inferring
+                    // missing video from dimensions or a decoder timeout.
+                    if let Some(generation) = active.and_then(|id| entries.get(&id)).copied()
+                        && core.string(c"vid").as_deref() == Some("no")
+                        && core.int(c"aid").is_some_and(|id| id > 0)
+                    {
+                        emit(&send, Signal::AudioOnly { generation });
+                    }
                 }
                 // FILE_LOADED can still expose the previous VO dimensions while the
                 // replacement decoder initializes. Wait until playback restarts.

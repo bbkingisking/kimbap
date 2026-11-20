@@ -96,6 +96,7 @@ impl ImageBackend {
                     self.started.get().elapsed().as_micros()
                 );
                 (self.notify)(Event::Ready {
+                    expand: true,
                     generation: reply.generation,
                     width,
                     height,

@@ -41,6 +41,7 @@ fn main() {
                 generation,
                 width,
                 height,
+                ..
             } => eprintln!("probe ready {generation} {width}x{height}"),
             Event::Failed { message, .. } => eprintln!("probe error: {message}"),
         }),

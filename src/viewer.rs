@@ -39,7 +39,7 @@ impl Viewer {
         pdf_worker: PathBuf,
     ) -> Result<Rc<Self>, glib::Error> {
         let css = gtk::CssProvider::new();
-        css.load_from_string(".kimbap {background:#181616;color:#c5c9c5;font-family:Pretendard,sans-serif;} .kimbap headerbar {background:#0d0c0c;color:#c5c9c5;} .kimbap .preview-error {color:#c4746e;padding:32px;} .kimbap button {color:#c5c9c5;} .kimbap .text-preview {background:#181616;color:#c5c9c5;font-family:\"IBM Plex Mono\",monospace;} .kimbap .video-progress highlight {background:#8ba4b0;}");
+        css.load_from_string(".kimbap {background:#181616;color:#c5c9c5;font-family:Pretendard,sans-serif;} .kimbap headerbar {background:#0d0c0c;color:#c5c9c5;} .kimbap .preview-error {color:#c4746e;padding:32px;} .kimbap button {color:#c5c9c5;} .kimbap .text-preview {background:#181616;color:#c5c9c5;font-family:\"IBM Plex Mono\",monospace;} .kimbap .audio-preview {background:#181616;} .kimbap .video-progress highlight {background:#8ba4b0;}");
         if let Some(display) = gdk::Display::default() {
             gtk::style_context_add_provider_for_display(
                 &display,
@@ -298,12 +298,13 @@ impl Viewer {
                 generation,
                 width,
                 height,
+                expand,
             } if generation == self.generation.get() && self.window.is_visible() => {
                 self.cancel_loading();
                 self.spinner.stop();
                 self.spinner.set_visible(false);
                 if !self.window.is_fullscreen() {
-                    self.size_for_content(width, height);
+                    self.size_for_content(width, height, expand);
                 }
                 self.trace_paint(generation);
             }
@@ -343,7 +344,7 @@ impl Viewer {
             eprintln!("kimbap: window state: {error}");
         }
     }
-    fn size_for_content(&self, width: i32, height: i32) {
+    fn size_for_content(&self, width: i32, height: i32, expand: bool) {
         if let Some(surface) = self.window.surface()
             && let Some(monitor) = surface.display().monitor_at_surface(&surface)
         {
@@ -351,6 +352,7 @@ impl Viewer {
             let max_w = (geometry.width() as f64 * 0.95).max(320.);
             let max_h = (geometry.height() as f64 * 0.90 - 52.).max(240.);
             let ratio = (max_w / width as f64).min(max_h / height as f64);
+            let ratio = if expand { ratio } else { ratio.min(1.) };
             self.window.set_default_size(
                 (width as f64 * ratio).round() as i32,
                 (height as f64 * ratio).round() as i32,

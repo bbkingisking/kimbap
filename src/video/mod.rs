@@ -28,6 +28,8 @@ pub fn initialize() -> Result<(), String> {
 pub struct VideoBackend {
     container: gtk::Box,
     area: gtk::GLArea,
+    audio: gtk::Box,
+    filename: gtk::Label,
     progress: gtk::Scale,
     elapsed: gtk::Label,
     total: gtk::Label,
@@ -111,7 +113,34 @@ impl VideoBackend {
         timeline.append(&total);
         timeline.append(&button);
         let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        container.append(&area);
+        let audio = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        audio.add_css_class("audio-preview");
+        audio.set_valign(gtk::Align::Fill);
+        audio.set_halign(gtk::Align::Fill);
+        let details = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        details.set_margin_start(24);
+        details.set_margin_end(24);
+        details.set_margin_top(24);
+        details.set_margin_bottom(24);
+        details.set_valign(gtk::Align::Center);
+        details.set_vexpand(true);
+        let icon = gtk::Image::from_icon_name("audio-x-generic-symbolic");
+        icon.set_pixel_size(64);
+        details.append(&icon);
+        let filename = gtk::Label::new(None);
+        filename.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        filename.set_margin_start(24);
+        filename.set_margin_end(24);
+        details.append(&filename);
+        details.append(&gtk::Label::new(Some("Audio only")));
+        audio.append(&details);
+        audio.set_visible(false);
+        // Cover the GL surface without unrealizing it: releasing the renderer
+        // stops playback, and it must remain available for the next video.
+        let display = gtk::Overlay::new();
+        display.set_child(Some(&area));
+        display.add_overlay(&audio);
+        container.append(&display);
         container.append(&timeline);
         let (control, signals) = Control::new(hwdec, ao);
         control.mute(muted);
@@ -119,6 +148,8 @@ impl VideoBackend {
         let backend = Rc::new(Self {
             container,
             area,
+            audio,
+            filename,
             progress,
             elapsed,
             total,
@@ -375,6 +406,16 @@ impl VideoBackend {
                 self.core.replace(Some(core));
                 self.initialize_renderer();
             }
+            Signal::AudioOnly { generation } if generation == self.generation.get() => {
+                self.audio.set_visible(true);
+                self.ready.set(Some(generation));
+                (self.notify)(Event::Ready {
+                    expand: false,
+                    generation,
+                    width: 528,
+                    height: 268,
+                });
+            }
             Signal::Info {
                 generation,
                 width,
@@ -452,6 +493,7 @@ impl VideoBackend {
                 self.started.get().elapsed().as_micros()
             );
             (self.notify)(Event::Ready {
+                expand: true,
                 generation,
                 width,
                 height,
@@ -505,6 +547,9 @@ impl Backend for VideoBackend {
     }
     fn load(&self, generation: u64, path: PathBuf) {
         self.generation.set(generation);
+        self.audio.set_visible(false);
+        self.filename
+            .set_label(&path.file_name().unwrap_or_default().to_string_lossy());
         self.scrubbing.set(false);
         self.scrolling.set(false);
         self.duration.set(0.);

@@ -122,6 +122,7 @@ impl Backend for TextBackend {
             .await;
             notify(match result {
                 Ok(()) => Event::Ready {
+                    expand: true,
                     generation,
                     width: 900,
                     height: 700,

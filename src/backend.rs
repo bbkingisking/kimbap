@@ -19,7 +19,7 @@ impl Kind {
             Some(Self::Image)
         } else if gio::content_type_is_a(content_type, "application/pdf") {
             Some(Self::Pdf)
-        } else if content_type.starts_with("video/") {
+        } else if content_type.starts_with("video/") || content_type.starts_with("audio/") {
             Some(Self::Video)
         } else if Self::is_text(content_type) {
             Some(Self::Text)
@@ -48,6 +48,8 @@ pub enum Event {
         generation: u64,
         width: i32,
         height: i32,
+        /// Expand visual content to fit the monitor; keep compact players at their requested size.
+        expand: bool,
     },
     Failed {
         generation: u64,
@@ -98,6 +100,9 @@ mod tests {
             Some(Kind::Video)
         );
         assert_eq!(Kind::for_content_type("video/webm"), Some(Kind::Video));
+        for mime in ["audio/webm", "audio/ogg", "audio/mpeg", "audio/flac"] {
+            assert_eq!(Kind::for_content_type(mime), Some(Kind::Video));
+        }
         assert_eq!(Kind::for_content_type("application/pdf"), Some(Kind::Pdf));
         assert_eq!(Kind::for_content_type("text/plain"), Some(Kind::Text));
         for mime in ["application/json", "application/yaml", "text/x-python"] {

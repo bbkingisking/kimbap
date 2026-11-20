@@ -258,6 +258,7 @@ impl PdfBackend {
                 // trigger another render. Only the first page sizes the shell.
                 if !self.ready.replace(true) {
                     (self.notify)(Event::Ready {
+                        expand: true,
                         generation: reply.generation,
                         width,
                         height,

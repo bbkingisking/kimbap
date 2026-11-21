@@ -143,6 +143,8 @@ impl Viewer {
         click.connect_pressed(move |_, count, _, _| {
             if count == 2
                 && let Some(v) = weak.upgrade()
+                // Text previews use double-clicks for word selection.
+                && v.active.get() != Some(Kind::Text)
             {
                 v.fullscreen();
             }
